@@ -8,6 +8,7 @@ import { action as openSpecAction, archive as archiveOpenSpec, ensureChange, loa
 import { activeChange, archiveCandidates, canonicalRoot, documentPath, internalRoot, openSpecLinkPath, relative, stageBundle, statePath, workflowRoot } from "./paths.js"
 import { loadState, saveState } from "./state.js"
 import { workflowTransition } from "./transition.js"
+import { withWorkflowLock } from "./lock.js"
 import type { Checkpoint, OpenSpecArtifact, ReviewDecision, StageAttempt, StageContract, StageSubmission, StageSubmissionPatchOperation, ValidationFinding, WorkflowIdentity, WorkflowProfile, WorkflowState, WorkflowType } from "./types.js"
 import { WorkflowError, WorkflowRuntimeError } from "./types.js"
 import { validateStageBundle } from "./validation.js"
@@ -39,6 +40,7 @@ export interface MilestoneSubmissionInput extends WorkflowIdentity {
 }
 export interface ReviewInput extends WorkflowIdentity { stage: string; decision: ReviewDecision; reviewer: string; feedback?: string }
 export interface MigrateInput extends WorkflowIdentity { legacyRoot: string }
+export interface StatusInput extends WorkflowIdentity { view?: "compact" | "full" }
 
 async function assertIdentity(identity: WorkflowIdentity) {
   if (!ID.test(identity.workflowId)) throw new WorkflowError("workflow-id must be lowercase kebab-case")
@@ -83,8 +85,18 @@ async function reconcile(root: string, state: WorkflowState): Promise<WorkflowSt
 
 export async function initialize(input: InitInput) {
   await assertIdentity(input)
-  const profile = await profileFor(input.workflowType)
   const root = await canonicalRoot(input)
+  // The change directory must not be created merely to acquire a lock: the
+  // initializer uses its absence to detect an existing OpenSpec change.
+  const lockRoot = path.resolve(input.projectRoot)
+  return withWorkflowLock(lockRoot, "initialize", () => initializeUnlocked(input, root), {
+    lockFile: path.join(lockRoot, ".ddd", "locks", `${input.workflowId}.lock`),
+  })
+}
+
+async function initializeUnlocked(input: InitInput, root: string) {
+  await assertIdentity(input)
+  const profile = await profileFor(input.workflowType)
   if (await exists(statePath(root)) || await exists(path.join(root, "workflow-state.json"))) throw new WorkflowError(`Workflow already exists: ${root}`)
   if (await exists(activeChange(input.projectRoot, input.workflowId)) || (await archiveCandidates(input.projectRoot, input.workflowId)).length) throw new WorkflowError(`workflow-id 必须与 OpenSpec change-id 一一对应且不可复用：${input.workflowId}`)
   if (profile.stages[0]?.id !== "00-request") throw new WorkflowError("Profile must begin with 00-request")
@@ -208,6 +220,12 @@ export async function prepareMilestone(input: WorkflowIdentity) {
 export async function submitMilestone(input: MilestoneSubmissionInput) {
   await assertIdentity(input)
   const root = await workflowRoot(input)
+  return withWorkflowLock(root, "submit-milestone", () => submitMilestoneUnlocked(input))
+}
+
+async function submitMilestoneUnlocked(input: MilestoneSubmissionInput) {
+  await assertIdentity(input)
+  const root = await workflowRoot(input)
   const initialState = await reconcile(root, await loadState(root))
   const profile = await profileFor(input.workflowType)
   const expected = milestoneBatchStages(profile, initialState).map((stage) => stage.id)
@@ -218,7 +236,7 @@ export async function submitMilestone(input: MilestoneSubmissionInput) {
   let finalTransition: unknown
   let humanReviewDocument: string | null = null
   for (const entry of input.submissions) {
-    const result: any = await submitStage({
+    const result: any = await submitStageUnlocked({
       workflowType: input.workflowType,
       workflowId: input.workflowId,
       projectRoot: input.projectRoot,
@@ -258,6 +276,12 @@ export async function submitMilestone(input: MilestoneSubmissionInput) {
 }
 
 export async function submitStage(input: StageSubmissionInput) {
+  await assertIdentity(input)
+  const root = await workflowRoot(input)
+  return withWorkflowLock(root, "submit-stage", () => submitStageUnlocked(input))
+}
+
+async function submitStageUnlocked(input: StageSubmissionInput) {
   await assertIdentity(input)
   const root = await workflowRoot(input)
   const state = await reconcile(root, await loadState(root))
@@ -420,8 +444,10 @@ async function recordStageFailure(root: string, state: WorkflowState, profile: W
 export async function checkpoint(input: CheckpointInput) {
   await assertIdentity(input)
   const root = await workflowRoot(input)
-  const state = await reconcile(root, await loadState(root))
-  return submit(root, state, input.stage, input.summary, input.evidenceFile)
+  return withWorkflowLock(root, "checkpoint", async () => {
+    const state = await reconcile(root, await loadState(root))
+    return submit(root, state, input.stage, input.summary, input.evidenceFile)
+  })
 }
 
 async function submit(root: string, state: WorkflowState, stageId: string, summary: string, evidenceFile?: string): Promise<any> {
@@ -513,6 +539,12 @@ async function submit(root: string, state: WorkflowState, stageId: string, summa
 export async function review(input: ReviewInput) {
   await assertIdentity(input)
   const root = await workflowRoot(input)
+  return withWorkflowLock(root, "review", () => reviewUnlocked(input))
+}
+
+async function reviewUnlocked(input: ReviewInput) {
+  await assertIdentity(input)
+  const root = await workflowRoot(input)
   const state = await reconcile(root, await loadState(root))
   const profile = await profileFor(input.workflowType)
   const target = [...state.checkpoints].reverse().find((item) => item.stage === input.stage && item.reviewStatus === "awaiting_review")
@@ -550,13 +582,33 @@ export async function review(input: ReviewInput) {
   return { review: target.review, transition: workflowTransition(profile, state) }
 }
 
-export async function status(input: WorkflowIdentity) {
+export async function status(input: StatusInput) {
   await assertIdentity(input)
   const root = await workflowRoot(input)
-  const state = await reconcile(root, await loadState(root))
+  // Status is intentionally read-only. Schema migrations and document
+  // reconciliation belong to mutating operations or an explicit resume.
+  const state = await loadState(root)
   const profile = await profileFor(input.workflowType)
   const latest = state.checkpoints.at(-1)
   const transition = workflowTransition(profile, state)
+  const compact = input.view === "compact"
+  const openSpecSummary = state.openSpec ? {
+    changeId: state.openSpec.changeId,
+    traceStatus: state.openSpec.status,
+    sourceOfTruth: state.openSpec.sourceOfTruth,
+  } : null
+  if (compact) return {
+    schemaVersion: "ddd-workflow-status/v1", view: "compact",
+    workflowType: state.workflowType, workflowId: state.workflowId,
+    status: state.status, currentStage: state.currentStage,
+    milestoneRoman: transition.milestoneRoman, milestoneTitle: transition.milestoneTitle,
+    milestoneReady: transition.milestoneReady, milestoneStatus: transition.milestoneStatus,
+    requiredAction: transition.requiredAction, stopAllowed: transition.stopAllowed,
+    mustContinue: transition.mustContinue, nextStage: transition.nextStage,
+    allowedNextStages: transition.allowedNextStages, nextHumanGate: transition.nextHumanGate,
+    openSpec: openSpecSummary, nextAction: transition.message,
+    readOnly: true, requiresReconcile: state.schemaVersion !== WORKFLOW_SCHEMA,
+  }
   return {
     workflowType: state.workflowType, workflowId: state.workflowId, status: state.status,
     currentStage: state.currentStage, currentStepTitle: latest?.stepTitle ?? null,
@@ -565,10 +617,17 @@ export async function status(input: WorkflowIdentity) {
     pendingCriticalReviews: state.checkpoints.filter((item) => item.criticalGate && item.reviewStatus === "awaiting_review").map((item) => ({ stage: item.stage, title: item.reviewTitle, document: item.document })),
     transition, ...transition, nextAction: transition.message,
     document: latest?.document, reviewTitle: latest?.reviewTitle, reviewChecklist: latest?.reviewChecklist ?? [], criticalGate: latest?.criticalGate, adviceRequired: latest?.adviceRequired ?? false,
+    readOnly: true, requiresReconcile: state.schemaVersion !== WORKFLOW_SCHEMA,
   }
 }
 
 export async function retryArchive(input: WorkflowIdentity) {
+  await assertIdentity(input)
+  const root = await workflowRoot(input)
+  return withWorkflowLock(root, "archive", () => retryArchiveUnlocked(input))
+}
+
+async function retryArchiveUnlocked(input: WorkflowIdentity) {
   await assertIdentity(input)
   const root = await workflowRoot(input)
   const state = await reconcile(root, await loadState(root))

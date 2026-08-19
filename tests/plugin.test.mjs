@@ -311,7 +311,7 @@ test("installer supports mobile-coder project discovery paths", async () => {
     assert.equal(install.host, "mobile")
     assert.equal(install.toolRegistration, "mobile-native-tools-directory")
     assert.equal(install.scope, "project")
-    assert.equal(install.version, "3.0.3")
+    assert.equal(install.version, "3.1.0")
     assert.deepEqual(install.tools, [
       "ddd_workflow_init",
       "ddd_workflow_prepare",
@@ -378,6 +378,18 @@ test("plugin initializes a real DDD workflow through the bundled OpenSpec CLI", 
     assert.equal(status.stopAllowed, false)
     assert.equal(status.humanReviewRequired, false)
     assert.equal(status.nextStage, "01-system-scenarios")
+    const compactOutput = await hooks.tool.ddd_workflow_status.execute({
+      workflow_type: "create-system",
+      workflow_id: "plugin-smoke-system",
+      view: "compact",
+    }, { worktree: project, directory: project })
+    const compact = JSON.parse(compactOutput)
+    assert.equal(compact.schemaVersion, "ddd-workflow-status/v1")
+    assert.equal(compact.view, "compact")
+    assert.equal(compact.readOnly, true)
+    assert.equal(compact.milestoneReady, false)
+    assert.equal(compact.nextStage, "01-system-scenarios")
+    assert.equal(compact.reviewChecklist, undefined)
     assert.ok(existsSync(path.join(
       project,
       "openspec",

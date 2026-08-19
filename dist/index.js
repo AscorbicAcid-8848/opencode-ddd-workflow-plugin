@@ -181,8 +181,8 @@ export const dddWorkflowTools = {
     }),
     ddd_workflow_status: tool({
         description: "Read the authoritative in-process TypeScript workflow transition; stopAllowed is the only normal stop authority.",
-        args: { workflow_type: workflowType, workflow_id: requiredText(), project_root: tool.schema.string().optional() },
-        async execute(args, context) { return executeTool("status", () => status(identity(args, context))); },
+        args: { workflow_type: workflowType, workflow_id: requiredText(), view: tool.schema.enum(["compact", "full"]).optional(), project_root: tool.schema.string().optional() },
+        async execute(args, context) { return executeTool("status", () => status({ ...identity(args, context), view: args.view })); },
     }),
     ddd_workflow_archive: tool({
         description: "Retry or finalize OpenSpec archive after milestone VI approval using the native TypeScript engine.",

@@ -12,13 +12,15 @@
 插件提供：
 
 - `/ddd`：加载 `ddd-orchestrate` 并执行用户请求；
-- `/ddd-status`：读取工作流状态，不推进流程；
+- `/ddd-status`：读取工作流状态，不推进流程；工具也支持 `view=compact`，只返回里程碑、下一动作和停机许可，适合低上下文会话；
 - 基于 `@opencode-ai/plugin` 的 7 个模型可见工具；Prepare/Submit 通过 `mode=milestone|stage` 复用同一协议；
 - 诊断、底层 checkpoint 与布局迁移通过 `dddWorkflowAdmin` 管理 API 提供，不占用模型上下文；
 - 正式里程碑文档对 LLM 的 `write/edit/apply_patch` 永久只读，只能由通过状态机与语义校验的 DDD 工具受控发布；
 - 无 Python 子进程的 TypeScript 状态机、阶段语义图校验和工程证据门禁；
 - `@fission-ai/openspec@1.7.0` 本地运行环境；
 - 将包内 19 个 `ddd-*` Skills 安装到 OpenCode 或 Mobile Coder 的技能目录。
+
+状态查询是只读投影，不会因为查看状态而自动迁移工作流。Schema 升级、文档补齐和状态修复由下一次明确的工作流操作完成。所有会修改 DDD 状态、checkpoint 或归档目录的操作都使用工作流级文件锁，避免 OpenCode 与 Mobile Coder 并发覆盖同一个 change。
 
 ## 安装
 
@@ -28,13 +30,13 @@ Node.js 需要 20.19.0 或更高版本。
 cd <本仓库>\opencode-ddd-workflow-plugin
 npm install
 npm pack
-npx --yes --package .\opencode-ddd-workflow-plugin-3.0.3.tgz ddd-opencode init --project E:\path\to\your-project
+npx --yes --package .\opencode-ddd-workflow-plugin-3.1.0.tgz ddd-opencode init --project E:\path\to\your-project
 ```
 
 使用同一个本地 tgz 安装或更新 mobile-coder 全局配置：
 
 ```powershell
-npx --yes --package .\opencode-ddd-workflow-plugin-3.0.3.tgz ddd-opencode init --host mobile --global --replace-legacy
+npx --yes --package .\opencode-ddd-workflow-plugin-3.1.0.tgz ddd-opencode init --host mobile --global --replace-legacy
 ```
 
 已有受管安装会被原地更新，无需增加 `--force`。更新后重启 mobile-coder 并新建会话，使新的 Slash 命令和工具生效。

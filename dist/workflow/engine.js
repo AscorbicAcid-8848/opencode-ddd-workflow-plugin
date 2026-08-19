@@ -8,6 +8,7 @@ import { action as openSpecAction, archive as archiveOpenSpec, ensureChange, upd
 import { activeChange, archiveCandidates, canonicalRoot, documentPath, internalRoot, openSpecLinkPath, relative, stageBundle, statePath, workflowRoot } from "./paths.js";
 import { loadState, saveState } from "./state.js";
 import { workflowTransition } from "./transition.js";
+import { withWorkflowLock } from "./lock.js";
 import { WorkflowError, WorkflowRuntimeError } from "./types.js";
 import { validateStageBundle } from "./validation.js";
 import { applyStageSubmissionPatch, compileStageSubmission, preparationContract, validateStageSubmission } from "./stage-submission.js";
@@ -62,8 +63,17 @@ async function reconcile(root, state) {
 }
 export async function initialize(input) {
     await assertIdentity(input);
-    const profile = await profileFor(input.workflowType);
     const root = await canonicalRoot(input);
+    // The change directory must not be created merely to acquire a lock: the
+    // initializer uses its absence to detect an existing OpenSpec change.
+    const lockRoot = path.resolve(input.projectRoot);
+    return withWorkflowLock(lockRoot, "initialize", () => initializeUnlocked(input, root), {
+        lockFile: path.join(lockRoot, ".ddd", "locks", `${input.workflowId}.lock`),
+    });
+}
+async function initializeUnlocked(input, root) {
+    await assertIdentity(input);
+    const profile = await profileFor(input.workflowType);
     if (await exists(statePath(root)) || await exists(path.join(root, "workflow-state.json")))
         throw new WorkflowError(`Workflow already exists: ${root}`);
     if (await exists(activeChange(input.projectRoot, input.workflowId)) || (await archiveCandidates(input.projectRoot, input.workflowId)).length)
@@ -191,6 +201,11 @@ export async function prepareMilestone(input) {
 export async function submitMilestone(input) {
     await assertIdentity(input);
     const root = await workflowRoot(input);
+    return withWorkflowLock(root, "submit-milestone", () => submitMilestoneUnlocked(input));
+}
+async function submitMilestoneUnlocked(input) {
+    await assertIdentity(input);
+    const root = await workflowRoot(input);
     const initialState = await reconcile(root, await loadState(root));
     const profile = await profileFor(input.workflowType);
     const expected = milestoneBatchStages(profile, initialState).map((stage) => stage.id);
@@ -202,7 +217,7 @@ export async function submitMilestone(input) {
     let finalTransition;
     let humanReviewDocument = null;
     for (const entry of input.submissions) {
-        const result = await submitStage({
+        const result = await submitStageUnlocked({
             workflowType: input.workflowType,
             workflowId: input.workflowId,
             projectRoot: input.projectRoot,
@@ -242,6 +257,11 @@ export async function submitMilestone(input) {
     };
 }
 export async function submitStage(input) {
+    await assertIdentity(input);
+    const root = await workflowRoot(input);
+    return withWorkflowLock(root, "submit-stage", () => submitStageUnlocked(input));
+}
+async function submitStageUnlocked(input) {
     await assertIdentity(input);
     const root = await workflowRoot(input);
     const state = await reconcile(root, await loadState(root));
@@ -409,8 +429,10 @@ async function recordStageFailure(root, state, profile, stage, findings, draft) 
 export async function checkpoint(input) {
     await assertIdentity(input);
     const root = await workflowRoot(input);
-    const state = await reconcile(root, await loadState(root));
-    return submit(root, state, input.stage, input.summary, input.evidenceFile);
+    return withWorkflowLock(root, "checkpoint", async () => {
+        const state = await reconcile(root, await loadState(root));
+        return submit(root, state, input.stage, input.summary, input.evidenceFile);
+    });
 }
 async function submit(root, state, stageId, summary, evidenceFile) {
     const profile = await profileFor(state.workflowType);
@@ -518,6 +540,11 @@ async function submit(root, state, stageId, summary, evidenceFile) {
 export async function review(input) {
     await assertIdentity(input);
     const root = await workflowRoot(input);
+    return withWorkflowLock(root, "review", () => reviewUnlocked(input));
+}
+async function reviewUnlocked(input) {
+    await assertIdentity(input);
+    const root = await workflowRoot(input);
     const state = await reconcile(root, await loadState(root));
     const profile = await profileFor(input.workflowType);
     const target = [...state.checkpoints].reverse().find((item) => item.stage === input.stage && item.reviewStatus === "awaiting_review");
@@ -566,10 +593,31 @@ export async function review(input) {
 export async function status(input) {
     await assertIdentity(input);
     const root = await workflowRoot(input);
-    const state = await reconcile(root, await loadState(root));
+    // Status is intentionally read-only. Schema migrations and document
+    // reconciliation belong to mutating operations or an explicit resume.
+    const state = await loadState(root);
     const profile = await profileFor(input.workflowType);
     const latest = state.checkpoints.at(-1);
     const transition = workflowTransition(profile, state);
+    const compact = input.view === "compact";
+    const openSpecSummary = state.openSpec ? {
+        changeId: state.openSpec.changeId,
+        traceStatus: state.openSpec.status,
+        sourceOfTruth: state.openSpec.sourceOfTruth,
+    } : null;
+    if (compact)
+        return {
+            schemaVersion: "ddd-workflow-status/v1", view: "compact",
+            workflowType: state.workflowType, workflowId: state.workflowId,
+            status: state.status, currentStage: state.currentStage,
+            milestoneRoman: transition.milestoneRoman, milestoneTitle: transition.milestoneTitle,
+            milestoneReady: transition.milestoneReady, milestoneStatus: transition.milestoneStatus,
+            requiredAction: transition.requiredAction, stopAllowed: transition.stopAllowed,
+            mustContinue: transition.mustContinue, nextStage: transition.nextStage,
+            allowedNextStages: transition.allowedNextStages, nextHumanGate: transition.nextHumanGate,
+            openSpec: openSpecSummary, nextAction: transition.message,
+            readOnly: true, requiresReconcile: state.schemaVersion !== WORKFLOW_SCHEMA,
+        };
     return {
         workflowType: state.workflowType, workflowId: state.workflowId, status: state.status,
         currentStage: state.currentStage, currentStepTitle: latest?.stepTitle ?? null,
@@ -578,9 +626,15 @@ export async function status(input) {
         pendingCriticalReviews: state.checkpoints.filter((item) => item.criticalGate && item.reviewStatus === "awaiting_review").map((item) => ({ stage: item.stage, title: item.reviewTitle, document: item.document })),
         transition, ...transition, nextAction: transition.message,
         document: latest?.document, reviewTitle: latest?.reviewTitle, reviewChecklist: latest?.reviewChecklist ?? [], criticalGate: latest?.criticalGate, adviceRequired: latest?.adviceRequired ?? false,
+        readOnly: true, requiresReconcile: state.schemaVersion !== WORKFLOW_SCHEMA,
     };
 }
 export async function retryArchive(input) {
+    await assertIdentity(input);
+    const root = await workflowRoot(input);
+    return withWorkflowLock(root, "archive", () => retryArchiveUnlocked(input));
+}
+async function retryArchiveUnlocked(input) {
     await assertIdentity(input);
     const root = await workflowRoot(input);
     const state = await reconcile(root, await loadState(root));

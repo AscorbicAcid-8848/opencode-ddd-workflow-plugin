@@ -35,6 +35,9 @@ export interface ReviewInput extends WorkflowIdentity {
 export interface MigrateInput extends WorkflowIdentity {
     legacyRoot: string;
 }
+export interface StatusInput extends WorkflowIdentity {
+    view?: "compact" | "full";
+}
 export declare function initialize(input: InitInput): Promise<{
     artifactRoot: string;
     checkpoint: any;
@@ -270,13 +273,40 @@ export declare function review(input: ReviewInput): Promise<{
     review: import("./types.js").ReviewRecord;
     transition: import("./types.js").Transition;
 }>;
-export declare function status(input: WorkflowIdentity): Promise<{
+export declare function status(input: StatusInput): Promise<{
+    schemaVersion: string;
+    view: string;
+    workflowType: WorkflowType;
+    workflowId: string;
+    status: string;
+    currentStage: string;
+    milestoneRoman: string | null;
+    milestoneTitle: string | null;
+    milestoneReady: boolean;
+    milestoneStatus: string;
+    requiredAction: "revise" | "complete" | "archive" | "continue" | "select-next-stage" | "await-human-review" | "stop" | "runtime-contract-repair";
+    stopAllowed: boolean;
+    mustContinue: boolean;
+    nextStage: string | null;
+    allowedNextStages: string[];
+    nextHumanGate: string | null;
+    openSpec: {
+        changeId: unknown;
+        traceStatus: unknown;
+        sourceOfTruth: unknown;
+    } | null;
+    nextAction: string;
+    readOnly: boolean;
+    requiresReconcile: boolean;
+} | {
     nextAction: string;
     document: string | undefined;
     reviewTitle: string | undefined;
     reviewChecklist: string[];
     criticalGate: string | undefined;
     adviceRequired: boolean;
+    readOnly: boolean;
+    requiresReconcile: boolean;
     schemaVersion: "ddd-workflow-transition/v1";
     workflowStatus: string;
     lastCompletedStage: string | null;
@@ -310,14 +340,42 @@ export declare function status(input: WorkflowIdentity): Promise<{
         document: string;
     }[];
     transition: import("./types.js").Transition;
+    view?: undefined;
 }>;
 export declare function retryArchive(input: WorkflowIdentity): Promise<{
+    schemaVersion: string;
+    view: string;
+    workflowType: WorkflowType;
+    workflowId: string;
+    status: string;
+    currentStage: string;
+    milestoneRoman: string | null;
+    milestoneTitle: string | null;
+    milestoneReady: boolean;
+    milestoneStatus: string;
+    requiredAction: "revise" | "complete" | "archive" | "continue" | "select-next-stage" | "await-human-review" | "stop" | "runtime-contract-repair";
+    stopAllowed: boolean;
+    mustContinue: boolean;
+    nextStage: string | null;
+    allowedNextStages: string[];
+    nextHumanGate: string | null;
+    openSpec: {
+        changeId: unknown;
+        traceStatus: unknown;
+        sourceOfTruth: unknown;
+    } | null;
+    nextAction: string;
+    readOnly: boolean;
+    requiresReconcile: boolean;
+} | {
     nextAction: string;
     document: string | undefined;
     reviewTitle: string | undefined;
     reviewChecklist: string[];
     criticalGate: string | undefined;
     adviceRequired: boolean;
+    readOnly: boolean;
+    requiresReconcile: boolean;
     schemaVersion: "ddd-workflow-transition/v1";
     workflowStatus: string;
     lastCompletedStage: string | null;
@@ -351,6 +409,7 @@ export declare function retryArchive(input: WorkflowIdentity): Promise<{
         document: string;
     }[];
     transition: import("./types.js").Transition;
+    view?: undefined;
 } | {
     artifactRoot: string;
     transition: import("./types.js").Transition;
