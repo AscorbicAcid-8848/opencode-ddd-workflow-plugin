@@ -1,0 +1,4 @@
+interface:
+  display_name: "DDD OpenSpec Bridge"
+  short_description: "用官方 OpenSpec 引擎托管 DDD Change、任务与历史"
+  default_prompt: "使用 $ddd-openspec-bridge 通过 OpenSpec CLI 托管同名 Change，并保持六份 DDD 里程碑、Spec 文档、实现任务和证据一致。"

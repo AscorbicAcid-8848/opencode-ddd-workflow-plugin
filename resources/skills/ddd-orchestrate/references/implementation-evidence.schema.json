@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ddd-implementation-evidence/v2",
+  "title": "DDD implementation evidence",
+  "type": "object",
+  "required": [
+    "schema",
+    "workflowId",
+    "stage",
+    "sliceId",
+    "baselineSha",
+    "implementationSha",
+    "commitSha",
+    "acceptanceCriteria",
+    "changedPaths",
+    "productionPaths",
+    "testPaths",
+    "consumerPaths",
+    "verification",
+    "runtimeEvidence",
+    "testEvidence",
+    "compatibility",
+    "rollback"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ddd-implementation-evidence/v2"
+    },
+    "workflowId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "stage": {
+      "type": "string"
+    },
+    "sliceId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "baselineSha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"
+    },
+    "implementationSha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"
+    },
+    "commitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"
+    },
+    "acceptanceCriteria": {
+      "$ref": "#/$defs/nonEmptyStrings"
+    },
+    "changedPaths": {
+      "$ref": "#/$defs/nonEmptyStrings"
+    },
+    "productionPaths": {
+      "$ref": "#/$defs/nonEmptyStrings"
+    },
+    "testPaths": {
+      "$ref": "#/$defs/nonEmptyStrings"
+    },
+    "consumerPaths": {
+      "$ref": "#/$defs/nonEmptyStrings"
+    },
+    "verification": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "command",
+          "exitCode",
+          "resultSummary"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "exitCode": {
+            "const": 0
+          },
+          "resultSummary": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "runtimeEvidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "kind",
+          "result",
+          "reference"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "result": {
+            "const": "passed"
+          },
+          "reference": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "testEvidence": {
+      "type": "object",
+      "required": [
+        "coverage",
+        "levels",
+        "e2e"
+      ],
+      "properties": {
+        "coverage": {
+          "type": "object",
+          "required": [
+            "acceptanceCriteria",
+            "invariants",
+            "mappings",
+            "uncovered"
+          ],
+          "properties": {
+            "acceptanceCriteria": {
+              "$ref": "#/$defs/nonEmptyStrings"
+            },
+            "invariants": {
+              "$ref": "#/$defs/uniqueStrings"
+            },
+            "mappings": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "targetId",
+                  "testPaths",
+                  "command",
+                  "result"
+                ],
+                "properties": {
+                  "targetId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "testPaths": {
+                    "$ref": "#/$defs/nonEmptyStrings"
+                  },
+                  "command": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "result": {
+                    "const": "passed"
+                  }
+                }
+              }
+            },
+            "uncovered": {
+              "type": "array",
+              "maxItems": 0
+            }
+          }
+        },
+        "levels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "level",
+              "testPaths",
+              "command",
+              "result"
+            ],
+            "properties": {
+              "level": {
+                "enum": [
+                  "domain",
+                  "application",
+                  "contract",
+                  "integration",
+                  "architecture",
+                  "e2e",
+                  "characterization"
+                ]
+              },
+              "testPaths": {
+                "$ref": "#/$defs/nonEmptyStrings"
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1
+              },
+              "result": {
+                "const": "passed"
+              }
+            }
+          }
+        },
+        "e2e": {
+          "type": "object",
+          "required": [
+            "result",
+            "command",
+            "testPaths",
+            "realConsumerPaths",
+            "mockPolicy",
+            "environment",
+            "reference"
+          ],
+          "properties": {
+            "result": {
+              "const": "passed"
+            },
+            "command": {
+              "type": "string",
+              "minLength": 1
+            },
+            "testPaths": {
+              "$ref": "#/$defs/nonEmptyStrings"
+            },
+            "realConsumerPaths": {
+              "$ref": "#/$defs/nonEmptyStrings"
+            },
+            "mockPolicy": {
+              "const": "no-business-path-mocks"
+            },
+            "environment": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reference": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "behaviorComparison": {
+          "type": "object",
+          "required": [
+            "result",
+            "baselineSha",
+            "implementationSha",
+            "baselineCommand",
+            "implementationCommand",
+            "baselineResult",
+            "implementationResult",
+            "comparedAcceptanceCriteria",
+            "differences",
+            "baselineReference",
+            "implementationReference"
+          ],
+          "properties": {
+            "result": {
+              "const": "passed"
+            },
+            "baselineSha": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"
+            },
+            "implementationSha": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"
+            },
+            "baselineCommand": {
+              "type": "string",
+              "minLength": 1
+            },
+            "implementationCommand": {
+              "type": "string",
+              "minLength": 1
+            },
+            "baselineResult": {
+              "const": "passed"
+            },
+            "implementationResult": {
+              "const": "passed"
+            },
+            "comparedAcceptanceCriteria": {
+              "$ref": "#/$defs/nonEmptyStrings"
+            },
+            "differences": {
+              "type": "array",
+              "maxItems": 0
+            },
+            "baselineReference": {
+              "type": "string",
+              "minLength": 1
+            },
+            "implementationReference": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "designConformance": {
+      "type": "object",
+      "required": [
+        "modelContractSha256",
+        "modelElementIds",
+        "invariantIds",
+        "deviations",
+        "summary"
+      ],
+      "properties": {
+        "modelContractSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "modelElementIds": {
+          "$ref": "#/$defs/uniqueStrings"
+        },
+        "invariantIds": {
+          "$ref": "#/$defs/uniqueStrings"
+        },
+        "deviations": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 20
+        }
+      }
+    },
+    "architectureConformance": {
+      "type": "object",
+      "required": [
+        "modelContractSha256",
+        "result",
+        "revision",
+        "checkedPaths",
+        "moduleEdges",
+        "legacyExceptions"
+      ],
+      "properties": {
+        "modelContractSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "result": {
+          "const": "passed"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$"
+        },
+        "checkedPaths": {
+          "$ref": "#/$defs/nonEmptyStrings"
+        },
+        "moduleEdges": {
+          "$ref": "#/$defs/uniqueStrings"
+        },
+        "legacyExceptions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "compatibility": {
+      "type": "string",
+      "minLength": 12
+    },
+    "rollback": {
+      "type": "string",
+      "minLength": 12
+    }
+  },
+  "$defs": {
+    "uniqueStrings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "nonEmptyStrings": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

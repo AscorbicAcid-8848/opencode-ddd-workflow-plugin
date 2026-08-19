@@ -1,0 +1,323 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DDD Strategic Baseline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workflowId",
+    "workflowType",
+    "historyScan",
+    "recoveredDecisions",
+    "unresolvedConflicts",
+    "strategicDisposition"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ddd-strategic-baseline/v1"
+    },
+    "workflowId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflowType": {
+      "enum": [
+        "add-feature",
+        "refactor-system"
+      ]
+    },
+    "historyScan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "historyIndex",
+        "historyIndexSha256",
+        "currentSpecs",
+        "changes"
+      ],
+      "properties": {
+        "historyIndex": {
+          "const": "openspec/change-history.md"
+        },
+        "historyIndexSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "currentSpecs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/specSource"
+          }
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/changeSource"
+          }
+        }
+      }
+    },
+    "recoveredDecisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/recoveredDecision"
+      }
+    },
+    "unresolvedConflicts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "strategicDisposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reused",
+        "changed",
+        "new",
+        "conflicts"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pending",
+            "proposed"
+          ]
+        },
+        "reused": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reusedDecision"
+          }
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/changedDecision"
+          }
+        },
+        "new": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/newDecision"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relevance": {
+      "enum": [
+        "relevant",
+        "not-relevant"
+      ]
+    },
+    "specSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "relevance",
+        "reason"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "relevance": {
+          "$ref": "#/$defs/relevance"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "changeSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "changeId",
+        "location",
+        "path",
+        "workflowType",
+        "status",
+        "strategicDesignPath",
+        "strategicDesignSha256",
+        "relevance",
+        "reason"
+      ],
+      "properties": {
+        "changeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "location": {
+          "enum": [
+            "active",
+            "archive"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflowType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1
+        },
+        "strategicDesignPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "strategicDesignSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relevance": {
+          "$ref": "#/$defs/relevance"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "recoveredDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sourcePath",
+        "sourceSha256",
+        "decision",
+        "reason"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^BASE-[0-9]{3,}$"
+        },
+        "sourcePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "decision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "reusedDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baselineDecisionId",
+        "rationale"
+      ],
+      "properties": {
+        "baselineDecisionId": {
+          "type": "string",
+          "pattern": "^BASE-[0-9]{3,}$"
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "changedDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baselineDecisionId",
+        "proposedDecision",
+        "reason",
+        "impact"
+      ],
+      "properties": {
+        "baselineDecisionId": {
+          "type": "string",
+          "pattern": "^BASE-[0-9]{3,}$"
+        },
+        "proposedDecision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "impact": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "newDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "proposedDecision",
+        "reason",
+        "impact"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^NEW-[0-9]{3,}$"
+        },
+        "proposedDecision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "impact": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

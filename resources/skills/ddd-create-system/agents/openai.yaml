@@ -1,0 +1,4 @@
+interface:
+  display_name: "DDD Top-down System Creation"
+  short_description: "从系统级用户场景自顶向下完成 DDD 战略与战术设计"
+  default_prompt: "使用 $ddd-create-system 从用户场景开始设计并创建一个逐阶段验收的 DDD 项目。"

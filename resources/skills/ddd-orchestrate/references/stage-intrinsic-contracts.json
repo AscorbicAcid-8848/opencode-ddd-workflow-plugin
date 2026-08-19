@@ -1,0 +1,611 @@
+{
+  "schemaVersion": "ddd-stage-intrinsic-contracts/v3",
+  "scopePolicies": {
+    "request-routing": {"allowedMaturities": ["fact", "proposed"]},
+    "refactor-scope-convergence": {"allowedMaturities": ["fact", "hypothesis", "candidate", "proposed"]},
+    "existing-system-baseline": {"allowedMaturities": ["fact", "hypothesis"]},
+    "system-scenarios": {"allowedMaturities": ["hypothesis", "candidate", "proposed"]},
+    "system-discovery": {"allowedMaturities": ["fact", "hypothesis", "candidate", "proposed"]},
+    "system-strategy": {"allowedMaturities": ["candidate", "proposed"]},
+    "context-discovery": {"allowedMaturities": ["hypothesis", "candidate"]},
+    "context-tactical-design": {"allowedMaturities": ["proposed"]},
+    "delivery-planning": {"allowedMaturities": ["proposed"]},
+    "approved-slice-implementation": {"allowedMaturities": ["fact", "implemented", "evidence"]},
+    "acceptance-evidence": {"allowedMaturities": ["fact", "proposed", "verified", "evidence"]}
+  },
+  "preApprovalForbiddenPatterns": [
+    {"id": "PREAPPROVAL-CONFIRMED-IN-SCOPE", "pattern": "已确认纳入本次(?:变更|Change|范围)"},
+    {"id": "PREAPPROVAL-FINALIZED", "pattern": "(?:已经|已)(?:最终)?收敛为最终|最终确定(?:为|采用)"},
+    {"id": "PREAPPROVAL-HUMAN-APPROVED", "pattern": "(?:本阶段|本里程碑|当前方案)(?:已经|已)获?人工批准"}
+  ],
+  "semanticGraph": {
+    "relationTypes": [
+      "emits",
+      "returns",
+      "triggers",
+      "blocks",
+      "governs",
+      "depends-on",
+      "supports",
+      "rejects"
+    ],
+    "scopeDispositions": [
+      "existing",
+      "requested",
+      "approved-prior",
+      "candidate",
+      "future"
+    ],
+    "flowRoles": [
+      "main",
+      "exception",
+      "alternative",
+      "supporting",
+      "none"
+    ],
+    "evidenceReferencePrefixes": [
+      "code:",
+      "runtime:",
+      "test:",
+      "schema:",
+      "openspec:",
+      "git:",
+      "user-input:",
+      "approval:",
+      "upstream:"
+    ],
+    "policies": {
+      "existing-system-baseline": {
+        "decisionPlane": "evidence",
+        "commonRequiredAttributes": ["decisionPlane", "authorityRefs"],
+        "kindContracts": {
+          "current-behavior-fact": {
+            "required": ["observationLevel", "availability", "systemBoundary", "evidenceSubject"],
+            "enums": {
+              "observationLevel": ["declared", "wired", "statically-reachable", "runtime-observed", "test-verified"],
+              "availability": ["operational", "partial", "stub", "absent", "unknown"],
+              "systemBoundary": ["internal", "external", "unknown"]
+            }
+          },
+          "current-topology-fact": {
+            "required": ["observationLevel", "availability", "systemBoundary", "evidenceSubject"],
+            "enums": {
+              "observationLevel": ["declared", "wired", "statically-reachable", "runtime-observed", "test-verified"],
+              "availability": ["operational", "partial", "stub", "absent", "unknown"],
+              "systemBoundary": ["internal", "external", "unknown"]
+            }
+          },
+          "capability-status": {
+            "required": ["capabilityId", "status", "sourceFactRefs"],
+            "enums": {"status": ["existing", "target", "future"]}
+          }
+        }
+      },
+      "big-picture-eventstorm": {
+        "decisionPlane": "business",
+        "commonRequiredAttributes": ["decisionPlane", "scopeDisposition", "flowRole", "authorityRefs"],
+        "kindContracts": {
+          "business-command": {
+            "required": ["intent", "businessSideEffect"],
+            "enums": {"intent": ["state-change", "information-request"]}
+          },
+          "domain-event": {
+            "required": ["businessEffect", "businessSubjectRef", "changedState"],
+            "enums": {"businessEffect": ["state-transition", "policy-trigger"]}
+          },
+          "read-model": {
+            "required": ["queryPurpose"]
+          },
+          "external-party": {
+            "required": ["boundary", "ownership", "boundaryEvidenceRefs"],
+            "enums": {
+              "boundary": ["external"],
+              "ownership": ["outside-current-system"]
+            }
+          },
+          "time-trigger": {
+            "required": ["timeSemantics"]
+          },
+          "open-question": {
+            "required": ["decisionId", "state"],
+            "enums": {"state": ["unresolved"]}
+          },
+          "capability-status": {
+            "required": ["capabilityId", "status", "sourceFactRefs"],
+            "enums": {"status": ["existing", "target", "future"]}
+          },
+          "current-behavior-fact": {
+            "required": ["observationLevel", "availability", "systemBoundary", "evidenceSubject", "sourceFactRefs"],
+            "enums": {
+              "observationLevel": ["declared", "wired", "statically-reachable", "runtime-observed", "test-verified"],
+              "availability": ["operational", "partial", "stub", "absent", "unknown"],
+              "systemBoundary": ["internal", "external", "unknown"]
+            }
+          }
+        }
+      },
+      "design-level-eventstorm": {
+        "decisionPlane": "tactical-discovery",
+        "commonRequiredAttributes": ["decisionPlane", "scopeDisposition", "flowRole", "authorityRefs"],
+        "kindContracts": {
+          "application-command": {
+            "required": ["intent", "businessSideEffect"],
+            "enums": {"intent": ["state-change", "information-request"]}
+          },
+          "internal-domain-event": {
+            "required": ["businessEffect", "businessSubjectRef", "changedState"],
+            "enums": {"businessEffect": ["state-transition", "policy-trigger"]}
+          },
+          "read-model": {"required": ["queryPurpose"]},
+          "external-party": {
+            "required": ["boundary", "ownership", "boundaryEvidenceRefs"],
+            "enums": {
+              "boundary": ["external"],
+              "ownership": ["outside-current-system"]
+            }
+          },
+          "time-trigger": {"required": ["timeSemantics"]},
+          "open-question": {
+            "required": ["decisionId", "state"],
+            "enums": {"state": ["unresolved"]}
+          }
+        }
+      },
+      "strategic-impact-design": {
+        "decisionPlane": "strategic",
+        "commonRequiredAttributes": ["decisionPlane", "authorityRefs", "inputItemRefs"],
+        "decisionKinds": ["subdomain-decision", "bounded-context-decision", "ubiquitous-language-decision", "context-relationship", "deployment-mapping", "integration-contract"],
+        "decisionStatus": "proposed"
+      },
+      "target-strategy": {
+        "decisionPlane": "strategic",
+        "commonRequiredAttributes": ["decisionPlane", "authorityRefs", "inputItemRefs"],
+        "decisionKinds": ["subdomain-decision", "bounded-context-decision", "ubiquitous-language-decision", "context-relationship", "deployment-mapping", "integration-contract"],
+        "decisionStatus": "proposed"
+      },
+      "subdomain-design": {
+        "decisionPlane": "strategic",
+        "commonRequiredAttributes": ["decisionPlane", "authorityRefs", "inputItemRefs"],
+        "decisionKinds": ["subdomain-decision"],
+        "decisionStatus": "proposed"
+      },
+      "bounded-context-design": {
+        "decisionPlane": "strategic",
+        "commonRequiredAttributes": ["decisionPlane", "authorityRefs", "inputItemRefs"],
+        "decisionKinds": ["bounded-context-decision", "ubiquitous-language-decision"],
+        "decisionStatus": "proposed"
+      },
+      "context-map-design": {
+        "decisionPlane": "strategic",
+        "commonRequiredAttributes": ["decisionPlane", "authorityRefs", "inputItemRefs"],
+        "decisionKinds": ["context-relationship", "deployment-mapping", "integration-contract"],
+        "decisionStatus": "proposed"
+      },
+      "implementation-unit-use-cases": {
+        "decisionPlane": "strategic",
+        "commonRequiredAttributes": ["decisionPlane", "authorityRefs", "inputItemRefs"],
+        "decisionKinds": ["implementation-unit-use-case", "integration-contract"],
+        "decisionStatus": "proposed"
+      },
+      "tactical-design": {
+        "decisionPlane": "tactical-design",
+        "commonRequiredAttributes": ["decisionPlane", "authorityRefs", "inputItemRefs"],
+        "decisionKinds": ["application-service-decision", "aggregate-decision", "entity-decision", "value-object-decision", "domain-service-decision", "repository-decision", "internal-domain-event", "persistence-mapping", "api-contract", "cache-strategy", "database-schema", "integration-contract"],
+        "decisionStatus": "proposed"
+      }
+    }
+  },
+  "deterministicSemanticRules": {
+    "big-picture-eventstorm": [
+      {
+        "id": "BP-TECHNICAL-SOLUTION",
+        "targets": ["items", "soleOutput", "sections"],
+        "excludeKinds": ["current-behavior-fact"],
+        "sections": ["战略事件风暴", "异常、补偿与时间约束", "热点与边界线索", "备选解释与建议"],
+        "pattern": "(?:Redis|MySQL|SETNX|ZSET|TTL\\s*=|唯一索引|分布式锁|缓存回填|存储表|缓存方案|混合方案|数据库方案|表结构|索引方案|ORM|Controller|Service|Mapper|Repository|DTO|包路径|\\.java\\b|HTTP\\s*(?:401|404|409)|返回\\s*(?:401|404|409))",
+        "message": "Big Picture 只能表达业务语义和热点，具体存储、缓存、传输或代码方案必须延期到责任阶段"
+      },
+      {
+        "id": "BP-CONTEXT-FINALIZED",
+        "targets": ["items", "soleOutput", "sections"],
+        "includeKinds": ["responsibility-clue"],
+        "sections": ["热点与边界线索"],
+        "pattern": "(?:限界)?上下文(?:\\s*[：:]|$)|BC-CAND",
+        "message": "战略事件风暴只能给出职责或边界线索，不能提前命名或定稿限界上下文"
+      },
+      {
+        "id": "BP-STRATEGIC-DECISION",
+        "targets": ["soleOutput", "sections"],
+        "sections": ["战略事件风暴", "热点与边界线索", "备选解释与建议"],
+        "pattern": "(?:核心域|支撑域|通用域|限界上下文|微服务|部署边界)",
+        "message": "子域、限界上下文和部署决定属于战略设计，不属于 Big Picture EventStorming"
+      }
+    ],
+    "strategic-impact-design": [
+      {
+        "id": "STRATEGY-TACTICAL-LEAK",
+        "targets": ["items", "soleOutput", "sections"],
+        "sections": ["子域划分", "限界上下文", "上下文映射", "工程承载关系", "历史战略决策处理", "备选战略方案与建议"],
+        "pattern": "(?:聚合根|值对象|领域服务|应用服务|Repository|Mapper|DTO|数据库表|唯一索引|缓存策略|代码路径|\\.java\\b)",
+        "message": "战略设计不能提前形成聚合、服务、持久化或代码级决定"
+      }
+    ],
+    "target-strategy": [
+      {
+        "id": "STRATEGY-TACTICAL-LEAK",
+        "targets": ["items", "soleOutput", "sections"],
+        "sections": ["子域划分", "限界上下文", "上下文映射", "工程承载关系", "历史战略决策处理", "备选战略方案与建议"],
+        "pattern": "(?:聚合根|值对象|领域服务|应用服务|Repository|Mapper|DTO|数据库表|唯一索引|缓存策略|代码路径|\\.java\\b)",
+        "message": "战略设计不能提前形成聚合、服务、持久化或代码级决定"
+      }
+    ],
+    "subdomain-design": [
+      {
+        "id": "SUBDOMAIN-BOUNDARY-LEAK",
+        "targets": ["items", "soleOutput", "sections"],
+        "sections": ["子域划分", "备选战略方案与建议"],
+        "pattern": "(?:聚合根|值对象|应用服务|数据库表|代码路径|\\.java\\b)",
+        "message": "子域识别只回答业务能力及差异化价值，不能提前做战术或代码决定"
+      }
+    ],
+    "bounded-context-design": [
+      {
+        "id": "CONTEXT-TACTICAL-LEAK",
+        "targets": ["items", "soleOutput", "sections"],
+        "sections": ["限界上下文", "历史战略决策处理"],
+        "pattern": "(?:聚合根|值对象|应用服务|Repository|DTO|数据库表|唯一索引|代码路径|\\.java\\b)",
+        "message": "限界上下文设计不能提前做战术模型、存储或代码决定"
+      }
+    ],
+    "context-map-design": [
+      {
+        "id": "CONTEXT-MAP-TACTICAL-LEAK",
+        "targets": ["items", "soleOutput", "sections"],
+        "sections": ["上下文映射", "工程承载关系", "备选战略方案与建议"],
+        "pattern": "(?:聚合根|值对象|应用服务|Repository|DTO|数据库表|唯一索引|代码路径|\\.java\\b)",
+        "message": "上下文映射不能提前做战术模型、存储或代码决定"
+      }
+    ],
+    "implementation-unit-use-cases": [
+      {
+        "id": "USECASE-TACTICAL-LEAK",
+        "targets": ["items", "soleOutput", "sections"],
+        "sections": ["实现单元用例包", "备选战略方案与建议"],
+        "pattern": "(?:聚合根|值对象|Repository|Mapper|数据库表|唯一索引|缓存策略|\\.java\\b)",
+        "message": "实现单元用例包只能交付业务命令、结果、失败与协作，不能提前设计战术模型"
+      }
+    ],
+    "design-level-eventstorm": [
+      {
+        "id": "DL-FINAL-DESIGN",
+        "targets": ["items", "soleOutput", "sections"],
+        "sections": ["战术事件风暴", "失败矩阵", "业务规则与不变量候选", "模型与边界候选", "持久化与运行热点", "战略回溯检查", "备选模型方向与建议"],
+        "pattern": "(?:最终聚合|聚合定稿|最终采用|定稿为|Repository|Mapper|DTO|数据库表|唯一索引|代码路径|\\.java\\b)",
+        "message": "Design-Level EventStorming 只能产生模型和存储候选，最终设计属于战术设计"
+      }
+    ],
+    "tactical-design": [
+      {
+        "id": "TACTICAL-CODING-LEAK",
+        "targets": ["items", "soleOutput", "sections"],
+        "sections": ["应用服务设计", "领域模型设计", "领域交互设计", "持久化与集成设计", "模块与分层设计", "测试设计", "设计与实现一致性清单", "领域模型一致性审查", "备选战术方案与建议"],
+        "pattern": "(?:生产代码已修改|代码已经实现|代码已实现|Commit\\s*(?:SHA)?|提交\\s*SHA|测试已通过|已经部署)",
+        "message": "战术设计只能形成待批准设计，代码、测试和 Git 结果属于实现阶段"
+      }
+    ],
+    "delivery-planning": [
+      {
+        "id": "PLAN-CODING-LEAK",
+        "targets": ["items", "soleOutput", "sections"],
+        "sections": ["交付范围", "纵向交付切片", "交付追踪矩阵", "OpenSpec 变更映射", "测试与验证计划", "Git 交付计划", "风险、迁移与上线", "备选交付方案与建议"],
+        "pattern": "(?:生产代码已修改|代码已经实现|代码已实现|提交\\s*SHA|测试已通过|已经部署)",
+        "message": "交付规划只能定义切片和验证计划，不能声称已完成实现"
+      }
+    ]
+  },
+  "itemKinds": [
+    "request-intent",
+    "route-decision",
+    "refactoring-seam-candidate",
+    "refactoring-scope-decision",
+    "system-scenario",
+    "business-goal",
+    "quality-constraint",
+    "current-behavior-fact",
+    "current-topology-fact",
+    "current-spec-decision",
+    "compatibility-constraint",
+    "evidence-gap",
+    "actor",
+    "business-command",
+    "domain-event",
+    "business-policy",
+    "read-model",
+    "external-party",
+    "time-trigger",
+    "failure",
+    "compensation",
+    "hotspot",
+    "responsibility-clue",
+    "open-question",
+    "capability-status",
+    "subdomain-decision",
+    "bounded-context-decision",
+    "ubiquitous-language-decision",
+    "context-relationship",
+    "deployment-mapping",
+    "integration-contract",
+    "implementation-unit-use-case",
+    "application-command",
+    "internal-domain-event",
+    "invariant-candidate",
+    "aggregate-candidate",
+    "transaction-hotspot",
+    "persistence-hotspot",
+    "application-service-decision",
+    "aggregate-decision",
+    "entity-decision",
+    "value-object-decision",
+    "domain-service-decision",
+    "repository-decision",
+    "persistence-mapping",
+    "api-contract",
+    "cache-strategy",
+    "database-schema",
+    "model-conformance-finding",
+    "delivery-slice",
+    "rollback-plan",
+    "openspec-planning-artifact",
+    "implementation-change",
+    "test-evidence",
+    "git-evidence",
+    "runtime-evidence",
+    "behavior-comparison",
+    "acceptance-finding",
+    "archive-decision"
+  ],
+  "stageBindings": {
+    "add-feature": {
+      "00-request": "request-routing",
+      "01-current-evidence": "existing-system-baseline",
+      "02-big-picture-event-storm": "big-picture-eventstorm",
+      "03-strategic-impact": "strategic-impact-design",
+      "04-service-use-cases": "implementation-unit-use-cases",
+      "05-design-level-event-storm": "design-level-eventstorm",
+      "06-tactical-design": "tactical-design",
+      "07-model-review": "tactical-model-review",
+      "08-roadmap": "delivery-planning",
+      "09-implementation": "approved-slice-implementation",
+      "10-final-review": "final-acceptance"
+    },
+    "refactor-system": {
+      "00-request": "request-routing",
+      "01-refactoring-scope-convergence": "refactoring-scope-convergence",
+      "01-baseline-evidence": "existing-system-baseline",
+      "02-as-is-big-picture-event-storm": "big-picture-eventstorm",
+      "03-target-strategy": "target-strategy",
+      "04-service-use-cases": "implementation-unit-use-cases",
+      "05-pilot-design-level-event-storm": "design-level-eventstorm",
+      "06-pilot-tactical-design": "tactical-design",
+      "07-migration-roadmap": "delivery-planning",
+      "08-implementation": "approved-slice-implementation",
+      "09-model-review": "implementation-conformance-review",
+      "10-final-review": "final-acceptance"
+    },
+    "create-system": {
+      "00-request": "request-routing",
+      "01-system-scenarios": "system-scenarios",
+      "02-big-picture-event-storm": "big-picture-eventstorm",
+      "03-subdomains": "subdomain-design",
+      "04-bounded-contexts": "bounded-context-design",
+      "05-context-map": "context-map-design",
+      "06-service-use-cases": "implementation-unit-use-cases",
+      "07-design-level-event-storm": "design-level-eventstorm",
+      "08-tactical-design": "tactical-design",
+      "09-architecture-review": "tactical-model-review",
+      "10-roadmap": "delivery-planning",
+      "11-implementation": "approved-slice-implementation",
+      "12-final-review": "final-acceptance"
+    }
+  },
+  "contracts": {
+    "request-routing": {
+      "scopeId": "request-routing",
+      "scale": "用户意图、仓库状态与三条互斥工作流",
+      "governingQuestion": "本次请求应进入哪一条且仅哪一条工作流？",
+      "consumes": ["用户原始请求", "仓库是否存在及是否已有生产行为"],
+      "allowedItemKinds": ["request-intent", "route-decision", "current-topology-fact", "open-question"],
+      "requiredAnyOf": [["route-decision"]],
+      "evidenceRequiredKinds": ["current-topology-fact"],
+      "ownedSections": ["业务主题与分析范围"],
+      "soleOutput": {"kind": "route-decision", "consumers": ["refactoring-scope-convergence", "existing-system-baseline", "system-scenarios"]}
+    },
+    "refactoring-scope-convergence": {
+      "scopeId": "refactor-scope-convergence",
+      "scale": "项目级重构意图与可验收端到端业务切面",
+      "governingQuestion": "宏大或模糊的重构请求，本轮应收敛到哪一个业务切面？",
+      "consumes": ["已批准路由", "项目级重构目标", "真实消费者入口线索"],
+      "allowedItemKinds": ["request-intent", "refactoring-seam-candidate", "refactoring-scope-decision", "business-goal", "compatibility-constraint", "evidence-gap", "open-question"],
+      "requiredAnyOf": [["refactoring-seam-candidate"], ["refactoring-scope-decision"]],
+      "evidenceRequiredKinds": ["refactoring-seam-candidate", "compatibility-constraint"],
+      "ownedSections": ["业务主题与分析范围", "备选解释与建议", "证据与追踪"],
+      "soleOutput": {"kind": "refactoring-scope-decision", "consumers": ["existing-system-baseline"]}
+    },
+    "existing-system-baseline": {
+      "scopeId": "existing-system-baseline",
+      "scale": "现有代码、接口、数据、测试、运行行为、正式 spec 与历史决策",
+      "governingQuestion": "系统当前真实做什么，哪些行为和历史决定必须保留？",
+      "consumes": ["已批准路由或重构切面", "仓库与运行证据", "OpenSpec 当前规格及历史 change"],
+      "allowedItemKinds": ["current-behavior-fact", "current-topology-fact", "current-spec-decision", "compatibility-constraint", "evidence-gap", "open-question", "capability-status"],
+      "requiredAnyOf": [["current-behavior-fact", "current-spec-decision"], ["compatibility-constraint"]],
+      "evidenceRequiredKinds": ["current-behavior-fact", "current-topology-fact", "current-spec-decision", "compatibility-constraint", "capability-status"],
+      "ownedSections": ["输入场景与现状事实", "证据与追踪"],
+      "soleOutput": {"kind": "current-behavior-fact", "consumers": ["big-picture-eventstorm"]}
+    },
+    "system-scenarios": {
+      "scopeId": "system-scenarios",
+      "scale": "新系统的参与者目标与系统级用户旅程",
+      "governingQuestion": "系统必须为哪些参与者产生什么可观察业务结果？",
+      "consumes": ["已批准路由", "业务目标", "质量要求"],
+      "allowedItemKinds": ["system-scenario", "business-goal", "quality-constraint", "actor", "failure", "open-question"],
+      "requiredAnyOf": [["system-scenario"], ["business-goal"]],
+      "evidenceRequiredKinds": [],
+      "ownedSections": ["业务主题与分析范围", "输入场景与现状事实", "证据与追踪"],
+      "soleOutput": {"kind": "system-scenario", "consumers": ["big-picture-eventstorm"]}
+    },
+    "big-picture-eventstorm": {
+      "scopeId": "system-discovery",
+      "scale": "整个系统或选定业务切面的端到端业务时间线",
+      "governingQuestion": "业务中发生了什么，哪里出现职责、热点和边界线索？",
+      "consumes": ["系统级用户场景", "现有系统时同时消费已验证现状基线"],
+      "allowedItemKinds": ["system-scenario", "actor", "business-command", "domain-event", "business-policy", "read-model", "external-party", "time-trigger", "failure", "compensation", "hotspot", "responsibility-clue", "open-question", "capability-status", "current-behavior-fact"],
+      "requiredAnyOf": [["domain-event"], ["responsibility-clue", "hotspot"]],
+      "evidenceRequiredKinds": ["current-behavior-fact"],
+      "ownedSections": ["业务主题与分析范围", "输入场景与现状事实", "战略事件风暴", "异常、补偿与时间约束", "热点与边界线索", "备选解释与建议", "证据与追踪"],
+      "soleOutput": {"kind": "responsibility-clue", "consumers": ["strategic-impact-design", "target-strategy", "subdomain-design"]}
+    },
+    "strategic-impact-design": {
+      "scopeId": "system-strategy",
+      "scale": "新增功能对现有领域边界、所有权和部署拓扑的战略影响",
+      "governingQuestion": "新增能力归谁所有，并如何落入现有部署形态而不夹带架构迁移？",
+      "consumes": ["批准的 Big Picture EventStorming", "现有战略基线", "现有部署拓扑"],
+      "allowedItemKinds": ["subdomain-decision", "bounded-context-decision", "ubiquitous-language-decision", "context-relationship", "deployment-mapping", "integration-contract", "compatibility-constraint", "open-question"],
+      "requiredAnyOf": [["bounded-context-decision"], ["deployment-mapping"]],
+      "evidenceRequiredKinds": ["compatibility-constraint"],
+      "ownedSections": ["战略设计范围与输入", "子域划分", "限界上下文", "上下文映射", "工程承载关系", "历史战略决策处理", "备选战略方案与建议", "证据与追踪"],
+      "soleOutput": {"kind": "bounded-context-decision", "consumers": ["implementation-unit-use-cases"]}
+    },
+    "target-strategy": {
+      "scopeId": "system-strategy",
+      "scale": "遗留系统的目标子域、限界上下文、所有权与迁移后部署边界",
+      "governingQuestion": "目标领域结构应怎样划分，才能承接选定切面并允许渐进迁移？",
+      "consumes": ["批准的 AS-IS Big Picture EventStorming", "行为保护基线", "已收敛重构切面"],
+      "allowedItemKinds": ["subdomain-decision", "bounded-context-decision", "ubiquitous-language-decision", "context-relationship", "deployment-mapping", "integration-contract", "compatibility-constraint", "open-question"],
+      "requiredAnyOf": [["bounded-context-decision"], ["deployment-mapping"]],
+      "evidenceRequiredKinds": ["compatibility-constraint"],
+      "ownedSections": ["战略设计范围与输入", "子域划分", "限界上下文", "上下文映射", "工程承载关系", "历史战略决策处理", "备选战略方案与建议", "证据与追踪"],
+      "soleOutput": {"kind": "bounded-context-decision", "consumers": ["implementation-unit-use-cases"]}
+    },
+    "subdomain-design": {
+      "scopeId": "system-strategy",
+      "scale": "业务能力及其差异化价值",
+      "governingQuestion": "哪些业务能力属于核心、支撑或通用子域？",
+      "consumes": ["批准的 Big Picture EventStorming"],
+      "allowedItemKinds": ["subdomain-decision", "business-goal", "responsibility-clue", "open-question"],
+      "requiredAnyOf": [["subdomain-decision"]],
+      "evidenceRequiredKinds": [],
+      "ownedSections": ["战略设计范围与输入", "子域划分", "备选战略方案与建议", "证据与追踪"],
+      "soleOutput": {"kind": "subdomain-decision", "consumers": ["bounded-context-design"]}
+    },
+    "bounded-context-design": {
+      "scopeId": "system-strategy",
+      "scale": "模型语言、职责、数据和团队所有权边界",
+      "governingQuestion": "每套领域模型在什么语义和所有权范围内成立？",
+      "consumes": ["子域设计", "Big Picture 的职责与语言线索"],
+      "allowedItemKinds": ["bounded-context-decision", "ubiquitous-language-decision", "responsibility-clue", "open-question"],
+      "requiredAnyOf": [["bounded-context-decision"], ["ubiquitous-language-decision"]],
+      "evidenceRequiredKinds": [],
+      "ownedSections": ["限界上下文", "历史战略决策处理", "证据与追踪"],
+      "soleOutput": {"kind": "bounded-context-decision", "consumers": ["context-map-design"]}
+    },
+    "context-map-design": {
+      "scopeId": "system-strategy",
+      "scale": "已批准限界上下文之间的上下游协作和部署承载",
+      "governingQuestion": "上下文如何协作，契约由谁拥有，部署边界如何映射？",
+      "consumes": ["限界上下文及通用语言", "质量与部署约束"],
+      "allowedItemKinds": ["context-relationship", "deployment-mapping", "integration-contract", "compatibility-constraint", "open-question"],
+      "requiredAnyOf": [["context-relationship", "integration-contract"], ["deployment-mapping"]],
+      "evidenceRequiredKinds": ["compatibility-constraint"],
+      "ownedSections": ["上下文映射", "工程承载关系", "历史战略决策处理", "备选战略方案与建议", "证据与追踪"],
+      "soleOutput": {"kind": "context-relationship", "consumers": ["implementation-unit-use-cases"]}
+    },
+    "implementation-unit-use-cases": {
+      "scopeId": "system-strategy",
+      "scale": "一个已批准模块、应用或微服务的自包含业务用例包",
+      "governingQuestion": "每个实现单元需要独立承接哪些业务命令、结果、失败和协作？",
+      "consumes": ["批准的战略设计", "系统级用户场景"],
+      "allowedItemKinds": ["implementation-unit-use-case", "business-command", "business-policy", "failure", "integration-contract", "compatibility-constraint", "open-question"],
+      "requiredAnyOf": [["implementation-unit-use-case"]],
+      "evidenceRequiredKinds": ["compatibility-constraint"],
+      "ownedSections": ["实现单元用例包", "备选战略方案与建议", "证据与追踪"],
+      "soleOutput": {"kind": "implementation-unit-use-case", "consumers": ["design-level-eventstorm"]}
+    },
+    "design-level-eventstorm": {
+      "scopeId": "context-discovery",
+      "scale": "一个已批准实现单元及其限界上下文内部的用例时间线",
+      "governingQuestion": "该上下文如何响应已批准用例，存在哪些规则、不变量和模型候选？",
+      "consumes": ["一个实现单元用例包", "该上下文职责与语言"],
+      "allowedItemKinds": ["implementation-unit-use-case", "application-command", "internal-domain-event", "business-policy", "read-model", "failure", "compensation", "invariant-candidate", "aggregate-candidate", "transaction-hotspot", "persistence-hotspot", "external-party", "time-trigger", "open-question"],
+      "requiredAnyOf": [["application-command"], ["internal-domain-event"], ["invariant-candidate", "transaction-hotspot"]],
+      "evidenceRequiredKinds": [],
+      "ownedSections": ["本次分析边界", "战术事件风暴", "失败矩阵", "业务规则与不变量候选", "模型与边界候选", "持久化与运行热点", "战略回溯检查", "备选模型方向与建议", "证据与追踪"],
+      "soleOutput": {"kind": "invariant-candidate", "consumers": ["tactical-design"]}
+    },
+    "tactical-design": {
+      "scopeId": "context-tactical-design",
+      "scale": "一个限界上下文内部的应用、领域和基础设施映射",
+      "governingQuestion": "怎样以领域模型实现批准用例并守住业务不变量？",
+      "consumes": ["批准的 Design-Level EventStorming", "实现单元用例包"],
+      "allowedItemKinds": ["application-service-decision", "aggregate-decision", "entity-decision", "value-object-decision", "domain-service-decision", "repository-decision", "internal-domain-event", "persistence-mapping", "api-contract", "cache-strategy", "database-schema", "integration-contract", "compatibility-constraint", "open-question"],
+      "requiredAnyOf": [["application-service-decision"], ["aggregate-decision", "domain-service-decision"], ["persistence-mapping"]],
+      "evidenceRequiredKinds": ["compatibility-constraint"],
+      "ownedSections": ["战术设计范围与输入", "应用服务设计", "领域模型设计", "领域交互设计", "持久化与集成设计", "模块与分层设计", "测试设计", "设计与实现一致性清单", "备选战术方案与建议", "证据与追踪"],
+      "soleOutput": {"kind": "aggregate-decision", "consumers": ["tactical-model-review"]}
+    },
+    "tactical-model-review": {
+      "scopeId": "context-tactical-design",
+      "scale": "批准战术模型与战略输入、用例和不变量之间的一致性",
+      "governingQuestion": "战术模型是否完整、一致且达到进入交付规划的条件？",
+      "consumes": ["战术设计", "战略设计", "实现单元用例", "Design-Level EventStorming"],
+      "allowedItemKinds": ["model-conformance-finding", "compatibility-constraint", "open-question"],
+      "requiredAnyOf": [["model-conformance-finding"]],
+      "evidenceRequiredKinds": ["model-conformance-finding", "compatibility-constraint"],
+      "ownedSections": ["领域模型一致性审查", "证据与追踪"],
+      "soleOutput": {"kind": "model-conformance-finding", "consumers": ["delivery-planning"]}
+    },
+    "delivery-planning": {
+      "scopeId": "delivery-planning",
+      "scale": "批准模型到可独立验收和回滚的纵向切片",
+      "governingQuestion": "按照什么切片、顺序、验证和回滚方式交付批准模型？",
+      "consumes": ["批准的战略与战术设计", "模型一致性结论"],
+      "allowedItemKinds": ["delivery-slice", "rollback-plan", "openspec-planning-artifact", "compatibility-constraint", "open-question"],
+      "requiredAnyOf": [["delivery-slice"], ["rollback-plan"], ["openspec-planning-artifact"]],
+      "evidenceRequiredKinds": ["compatibility-constraint"],
+      "ownedSections": ["交付范围", "纵向交付切片", "交付追踪矩阵", "OpenSpec 变更映射", "测试与验证计划", "Git 交付计划", "风险、迁移与上线", "备选交付方案与建议", "证据与追踪"],
+      "soleOutput": {"kind": "delivery-slice", "consumers": ["approved-slice-implementation"]}
+    },
+    "approved-slice-implementation": {
+      "scopeId": "approved-slice-implementation",
+      "scale": "一个已批准纵向切片的生产代码、测试、Git 和运行证据",
+      "governingQuestion": "这个切片是否按批准模型接入真实消费者并通过全部要求的验证？",
+      "consumes": ["一个批准纵向切片", "model-contract.json", "OpenSpec tasks"],
+      "allowedItemKinds": ["implementation-change", "test-evidence", "git-evidence", "runtime-evidence", "behavior-comparison", "model-conformance-finding", "compatibility-constraint", "rollback-plan"],
+      "requiredAnyOf": [["implementation-change"], ["test-evidence"], ["git-evidence"], ["runtime-evidence"]],
+      "evidenceRequiredKinds": ["implementation-change", "test-evidence", "git-evidence", "runtime-evidence", "behavior-comparison", "model-conformance-finding", "compatibility-constraint", "rollback-plan"],
+      "ownedSections": ["已交付范围", "最终业务验收矩阵", "设计与代码一致性", "架构一致性", "测试与运行证据", "Git 与回滚证据", "兼容性、上线与遗留问题", "证据与追踪"],
+      "soleOutput": {"kind": "implementation-change", "consumers": ["implementation-conformance-review", "final-acceptance"]}
+    },
+    "implementation-conformance-review": {
+      "scopeId": "acceptance-evidence",
+      "scale": "全部已实现迁移切片对批准模型与基线行为的覆盖",
+      "governingQuestion": "实现是否覆盖批准模型且没有扩大遗留违规或改变未批准行为？",
+      "consumes": ["全部实现证据", "行为基线", "批准模型合同"],
+      "allowedItemKinds": ["model-conformance-finding", "behavior-comparison", "test-evidence", "runtime-evidence", "compatibility-constraint", "open-question"],
+      "requiredAnyOf": [["model-conformance-finding"], ["behavior-comparison"]],
+      "evidenceRequiredKinds": ["model-conformance-finding", "behavior-comparison", "test-evidence", "runtime-evidence", "compatibility-constraint"],
+      "ownedSections": ["设计与代码一致性", "架构一致性", "测试与运行证据", "兼容性、上线与遗留问题", "证据与追踪"],
+      "soleOutput": {"kind": "model-conformance-finding", "consumers": ["final-acceptance"]}
+    },
+    "final-acceptance": {
+      "scopeId": "acceptance-evidence",
+      "scale": "本次 change 的业务结果、模型覆盖、测试、Git、回滚与归档证据",
+      "governingQuestion": "本次 change 是否完整生效、可追踪、可回滚并可以归档？",
+      "consumes": ["全部批准里程碑", "实现与验证证据", "OpenSpec change 状态"],
+      "allowedItemKinds": ["acceptance-finding", "model-conformance-finding", "test-evidence", "git-evidence", "runtime-evidence", "behavior-comparison", "compatibility-constraint", "rollback-plan", "archive-decision", "open-question"],
+      "requiredAnyOf": [["acceptance-finding"], ["archive-decision"]],
+      "evidenceRequiredKinds": ["acceptance-finding", "model-conformance-finding", "test-evidence", "git-evidence", "runtime-evidence", "behavior-comparison", "compatibility-constraint", "rollback-plan", "archive-decision"],
+      "ownedSections": ["已交付范围", "最终业务验收矩阵", "设计与代码一致性", "架构一致性", "测试与运行证据", "Git 与回滚证据", "兼容性、上线与遗留问题", "OpenSpec 完成状态", "最终验收决定", "证据与追踪"],
+      "soleOutput": {"kind": "archive-decision", "consumers": []}
+    }
+  }
+}

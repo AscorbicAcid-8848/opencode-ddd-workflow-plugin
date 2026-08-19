@@ -1,0 +1,4 @@
+interface:
+  display_name: "DDD Workflow Router"
+  short_description: "路由三种 DDD 工作流，并把完整工件统一托管到同名 OpenSpec change"
+  default_prompt: "使用 $ddd-orchestrate 判断我的 DDD 场景，在一个同名 OpenSpec change 中执行六里程碑工作流，并确保最终交付具有真实代码、测试、Git、回滚与归档证据。"

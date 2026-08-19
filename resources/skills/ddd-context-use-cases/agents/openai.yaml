@@ -1,0 +1,4 @@
+interface:
+  display_name: "DDD Context Use Cases"
+  short_description: "将战略设计结果转换为每个微服务可执行的战术用例输入"
+  default_prompt: "使用 $ddd-context-use-cases 把已批准的战略设计转换为各微服务及其限界上下文的用例需求。"

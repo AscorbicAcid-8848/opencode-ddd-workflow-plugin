@@ -1,0 +1,4 @@
+interface:
+  display_name: "DDD Git 交付"
+  short_description: "在DDD编码阶段保护现有改动并按纵向切片管理Git提交"
+  default_prompt: "使用 $ddd-git-delivery 为当前 DDD 编码阶段建立安全基线，按纵向切片提交并生成可审计的交付记录。"

@@ -1,0 +1,11 @@
+import type { StageContract, WorkflowProfile, WorkflowType } from "./types.js";
+export declare function profiles(): Promise<any>;
+export declare function intrinsics(): Promise<any>;
+export declare function documents(): Promise<any>;
+export declare function profileFor(type: WorkflowType): Promise<WorkflowProfile>;
+export declare function intrinsicFor(type: WorkflowType, stageId: string): Promise<[string, any]>;
+export declare function stageContract(profile: WorkflowProfile, stageId: string): StageContract;
+export declare function stageIndex(profile: WorkflowProfile, stageId: string): number;
+export declare function validateTopology(profile: WorkflowProfile): void;
+export declare const stageTitles: Record<string, string>;
+export declare const stageTitle: (stage: StageContract) => string;

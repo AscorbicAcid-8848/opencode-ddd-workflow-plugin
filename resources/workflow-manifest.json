@@ -1,0 +1,276 @@
+{
+  "schema": "ddd-opencode-workflow-bundle/v1",
+  "skills": [
+    "ddd-aggregates",
+    "ddd-application-services",
+    "ddd-context-map",
+    "ddd-context-use-cases",
+    "ddd-contexts",
+    "ddd-create-system",
+    "ddd-deliver-feature",
+    "ddd-develop",
+    "ddd-discover",
+    "ddd-domain-interactions",
+    "ddd-git-delivery",
+    "ddd-model-review",
+    "ddd-openspec-bridge",
+    "ddd-orchestrate",
+    "ddd-persistence-design",
+    "ddd-refactor-system",
+    "ddd-roadmap",
+    "ddd-scope",
+    "ddd-subdomains"
+  ],
+  "files": [
+    {
+      "path": "ddd-aggregates/SKILL.en.md",
+      "bytes": 5906,
+      "sha256": "ebc136d1b6d93a2077bb9da936ca69f6ad62f5dea7945f0b9e1bd35e071a90a0"
+    },
+    {
+      "path": "ddd-aggregates/SKILL.md",
+      "bytes": 5222,
+      "sha256": "aaa2f88c177dfc67a8c3aa4884b0017739c9dae31cc8e1d3ac1b7d31e72284dd"
+    },
+    {
+      "path": "ddd-application-services/agents/openai.yaml",
+      "bytes": 277,
+      "sha256": "a18d40dc95ebb0af01feaed5bbfdbd79ea48948ac7a03cdedb63464144e107e0"
+    },
+    {
+      "path": "ddd-application-services/SKILL.md",
+      "bytes": 3082,
+      "sha256": "6a40cbe55e32fcc063ec54091be094c94895801dad411cebe91b307a5a1e01b5"
+    },
+    {
+      "path": "ddd-context-map/SKILL.en.md",
+      "bytes": 4198,
+      "sha256": "e5319c586a691233b039d9c062bf22e26c988654ae39b442376988159ab30b5a"
+    },
+    {
+      "path": "ddd-context-map/SKILL.md",
+      "bytes": 4259,
+      "sha256": "aa689509996dbd23eb96b10c932b82be59f31cc0f69fbef08317e7207ebf47e5"
+    },
+    {
+      "path": "ddd-context-use-cases/agents/openai.yaml",
+      "bytes": 290,
+      "sha256": "b9545da2cd1b4f8614a22fe95519af4232b2ed50176ba2370f60778f3beacbd7"
+    },
+    {
+      "path": "ddd-context-use-cases/SKILL.md",
+      "bytes": 4833,
+      "sha256": "7cd1e7fd124ddedd8a2b393737a423cd7abd62a2762542aa8d5cd6ba39910fb1"
+    },
+    {
+      "path": "ddd-contexts/SKILL.en.md",
+      "bytes": 4743,
+      "sha256": "543228f4dad810a07490c350f806c1fec31c96979853da09e06388e8f01c62f1"
+    },
+    {
+      "path": "ddd-contexts/SKILL.md",
+      "bytes": 4183,
+      "sha256": "e9799f5218403b22797ba2d70ce2a3a02b46d708b4b45a8c5867ee4b4c02f1e0"
+    },
+    {
+      "path": "ddd-create-system/agents/openai.yaml",
+      "bytes": 275,
+      "sha256": "46c94668799c3e8eb7988ded381a50bba9b3979ef0818778c969305c7dfedc57"
+    },
+    {
+      "path": "ddd-create-system/SKILL.md",
+      "bytes": 8541,
+      "sha256": "f4f10869b93b5a96de882bcb6815d6e744eb8b6ba43f230fc364f38ec9597537"
+    },
+    {
+      "path": "ddd-deliver-feature/agents/openai.yaml",
+      "bytes": 363,
+      "sha256": "e9e8de448bd041dee9c4f870b0a83fa6ceba5576f600af23f51c85078cff202d"
+    },
+    {
+      "path": "ddd-deliver-feature/references/artifact-contract.md",
+      "bytes": 9064,
+      "sha256": "ebd3e0af4d565a094909eecc977b80b2d931be3325efe8ce6ee82942c8589572"
+    },
+    {
+      "path": "ddd-deliver-feature/SKILL.md",
+      "bytes": 6520,
+      "sha256": "ad30fd419646edd542b8136e65dc55f7226ba59ca612507697b51db3e9f19a06"
+    },
+    {
+      "path": "ddd-develop/SKILL.md",
+      "bytes": 9172,
+      "sha256": "e7bdb5703b0ec19f2726410203007b87a281e4061342836959df1919f606d6cc"
+    },
+    {
+      "path": "ddd-discover/SKILL.en.md",
+      "bytes": 4006,
+      "sha256": "ea4f6f85b4b1f5b134fe1e63a9a37796e4ecefdba2766fbd808644abea6b7327"
+    },
+    {
+      "path": "ddd-discover/SKILL.md",
+      "bytes": 8870,
+      "sha256": "512547c9d8e5dc8cb294788be2a19b52c4a16e6699ad8bb621b63b4fc1b57d78"
+    },
+    {
+      "path": "ddd-domain-interactions/SKILL.en.md",
+      "bytes": 4990,
+      "sha256": "bc1cf159d2d4ea16880cc64f3f36b9dce08f9f21224274bc5dcf7cfca676d2f2"
+    },
+    {
+      "path": "ddd-domain-interactions/SKILL.md",
+      "bytes": 4431,
+      "sha256": "a3c2a4c282c3c9a60b09deba77bd926ca78be48b1ea02a8ca8a55347410a8e91"
+    },
+    {
+      "path": "ddd-git-delivery/agents/openai.yaml",
+      "bytes": 287,
+      "sha256": "f5540a31c781c3c0515cf3dc28898306e1da78e1a9703b88b98f6457f66aa1b9"
+    },
+    {
+      "path": "ddd-git-delivery/SKILL.md",
+      "bytes": 5785,
+      "sha256": "33b933262fc0af6c275e923701f4c90ec986a682d0dd26da81e52847f8d73fac"
+    },
+    {
+      "path": "ddd-model-review/SKILL.en.md",
+      "bytes": 6446,
+      "sha256": "0513227b986cb649d0b424b761337dcd918cd0b2941cc86a5535219b8ecac506"
+    },
+    {
+      "path": "ddd-model-review/SKILL.md",
+      "bytes": 9214,
+      "sha256": "42013d54b9659d7183526aec21f6f827d0ac04c3f23b336c5bc1928cde533656"
+    },
+    {
+      "path": "ddd-openspec-bridge/agents/openai.yaml",
+      "bytes": 300,
+      "sha256": "ac0470a435b623f4dba556141e7afd6e5f0212d8dbc156d9f451cbdc06f3d748"
+    },
+    {
+      "path": "ddd-openspec-bridge/references/ddd-openspec-lifecycle.md",
+      "bytes": 9354,
+      "sha256": "324c279870216ce832e7a1666758eb4b83b77f25d7a1783c799d03f0d2d7f140"
+    },
+    {
+      "path": "ddd-openspec-bridge/SKILL.md",
+      "bytes": 7979,
+      "sha256": "710d08edaeb2fba55a1e14b45f7e6a26bc63b7908c25d7df063dcb471a627831"
+    },
+    {
+      "path": "ddd-orchestrate/agents/openai.yaml",
+      "bytes": 374,
+      "sha256": "1610f9ed250520edbbdcd4fec8aec38481d0d9ce0d9b63669cbad822bc5b10e3"
+    },
+    {
+      "path": "ddd-orchestrate/references/artifact-layout.md",
+      "bytes": 8070,
+      "sha256": "b04919323994c6629c714512e42c39388526fee37ded533aaa2fdda39e9f3e56"
+    },
+    {
+      "path": "ddd-orchestrate/references/implementation-conformance-contract.md",
+      "bytes": 6114,
+      "sha256": "8e243760473f5650b51472b64ec5973ec3f2c270320ec5518c6dec994d46854d"
+    },
+    {
+      "path": "ddd-orchestrate/references/implementation-evidence.schema.json",
+      "bytes": 9618,
+      "sha256": "a70cfb97cac78629e5b888d70b9ccc4d22525ace83f68c1bdcbc47fc9461e629"
+    },
+    {
+      "path": "ddd-orchestrate/references/milestone-document-contracts.json",
+      "bytes": 16627,
+      "sha256": "fc39b9a1899211ff7c8d353fd4463a822511936447a8986a9b874c7d6d526a85"
+    },
+    {
+      "path": "ddd-orchestrate/references/phase-scope-contracts.md",
+      "bytes": 8895,
+      "sha256": "f34022ed935853ab5eec3d07c3e48cb5c63e585ebee8f99fb3ac4b3630dcc43d"
+    },
+    {
+      "path": "ddd-orchestrate/references/routing-rules.md",
+      "bytes": 2113,
+      "sha256": "e53cf0a469933360b9abaf51265b6065b23b008cb97a011ed3d7ae317b0ff2ee"
+    },
+    {
+      "path": "ddd-orchestrate/references/stage-intrinsic-contracts.json",
+      "bytes": 36160,
+      "sha256": "6aef5219a79ea8b301de13b88ef48ffb170c03513847306a66895c4e349dbb15"
+    },
+    {
+      "path": "ddd-orchestrate/references/stage-scope-review-contract.md",
+      "bytes": 5851,
+      "sha256": "7422da8b1348e9c362f1465ce1af10947890784371994f661425f34b07436892"
+    },
+    {
+      "path": "ddd-orchestrate/references/strategic-baseline-contract.md",
+      "bytes": 4188,
+      "sha256": "9cd2e37e9a2cd0dda696ab42747b430f9b1315b4d95170d97133888535616dbe"
+    },
+    {
+      "path": "ddd-orchestrate/references/strategic-baseline.schema.json",
+      "bytes": 6696,
+      "sha256": "eba44f90267b375b0f7a847be61330144d6f2f70d5ecbfcb10dee230470a147f"
+    },
+    {
+      "path": "ddd-orchestrate/references/workflow-profiles.json",
+      "bytes": 49473,
+      "sha256": "0cf813826cc771442e19d3be481cf283fad7c6e483664e5eecbf9e2d927f3881"
+    },
+    {
+      "path": "ddd-orchestrate/SKILL.md",
+      "bytes": 7348,
+      "sha256": "b6e67ed8412386f6a9ebd109cf016d7992032c54ceb2bca5b3bc1be83828c656"
+    },
+    {
+      "path": "ddd-persistence-design/agents/openai.yaml",
+      "bytes": 288,
+      "sha256": "7920b1e1d1871b09530f4fedeb06ec91ea58446a7f13b8e20c4717fa5aa17762"
+    },
+    {
+      "path": "ddd-persistence-design/SKILL.md",
+      "bytes": 2934,
+      "sha256": "54e19f7267b098a7f0e6007258eebd26797a27632e0dd19ec5b880e2f4a6af2e"
+    },
+    {
+      "path": "ddd-refactor-system/agents/openai.yaml",
+      "bytes": 343,
+      "sha256": "c5395a0fb5a3efbe5d780f2d45ebdacbd96e6dc30372b1e39bb0445e8b3bb89e"
+    },
+    {
+      "path": "ddd-refactor-system/SKILL.md",
+      "bytes": 11498,
+      "sha256": "4e418e153c3f370c491594e23aeadb2e7e0e67d448f72d291f5838072fd0d5e9"
+    },
+    {
+      "path": "ddd-roadmap/references/product-brief-format.md",
+      "bytes": 1870,
+      "sha256": "381cf0aa34f4dac19676322310ca692714d47fd49e6e31de12327e1c0d90f406"
+    },
+    {
+      "path": "ddd-roadmap/SKILL.md",
+      "bytes": 9386,
+      "sha256": "cd84e79cb206f302d97dc9dcc45bf64b4c77d88efb956657c3f4f38fa6d13261"
+    },
+    {
+      "path": "ddd-scope/SKILL.en.md",
+      "bytes": 3904,
+      "sha256": "1a4ad4b0d2ede48ff54d9ff6d2cc6ac9a1e914e37d3cd628e070bc3a3bd9e46c"
+    },
+    {
+      "path": "ddd-scope/SKILL.md",
+      "bytes": 3224,
+      "sha256": "3842c9872d7ba4d7d95cda483946fa0197759bab66d7a6b3a8764379708ebacd"
+    },
+    {
+      "path": "ddd-subdomains/SKILL.en.md",
+      "bytes": 4057,
+      "sha256": "e094085c2a799869d4e0de89a5d3c71ad7f12112fae647156beb1156b80621ec"
+    },
+    {
+      "path": "ddd-subdomains/SKILL.md",
+      "bytes": 3633,
+      "sha256": "9faea2679fc32a5150dece61cb2ee87b0e8b72dddd89c5131d5724d47d9c4f6e"
+    }
+  ]
+}

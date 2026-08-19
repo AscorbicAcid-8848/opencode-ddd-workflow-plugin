@@ -1,0 +1,4 @@
+interface:
+  display_name: "DDD Application Services"
+  short_description: "从上下文用例设计应用服务、命令处理、事务与流程编排职责"
+  default_prompt: "使用 $ddd-application-services 根据战术事件风暴设计应用服务和事务编排。"

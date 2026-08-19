@@ -1,0 +1,4 @@
+interface:
+  display_name: "DDD Bottom-up Refactoring"
+  short_description: "继承历史战略基线、收敛试点并渐进完成 DDD 重构"
+  default_prompt: "使用 $ddd-refactor-system 先收敛重构范围并读取当前 OpenSpec specs 与历史 DDD 战略设计，再形成可回滚、逐阶段验收的目标战略与迁移切片。"

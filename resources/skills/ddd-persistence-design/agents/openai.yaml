@@ -1,0 +1,4 @@
+interface:
+  display_name: "DDD Persistence Design"
+  short_description: "将聚合仓储契约映射为数据库、缓存、消息可靠性与迁移设计"
+  default_prompt: "使用 $ddd-persistence-design 为已批准的聚合设计持久化映射和基础设施适配器方案。"

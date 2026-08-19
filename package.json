@@ -1,0 +1,46 @@
+{
+  "name": "opencode-ddd-workflow-plugin",
+  "version": "3.0.3",
+  "description": "Native TypeScript OpenCode SDK plugin for deterministic DDD/OpenSpec workflows.",
+  "type": "module",
+  "exports": "./dist/index.js",
+  "bin": {
+    "ddd-opencode": "./bin/ddd-opencode.mjs"
+  },
+  "files": [
+    "bin",
+    "resources",
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/**/*.js.map",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "sync:workflow": "node scripts/sync-workflow.mjs",
+    "check:workflow": "node scripts/sync-workflow.mjs --check",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "test:bun-host": "npm run build && bun tests/bun-host-smoke.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run check:workflow && npm test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "@fission-ai/openspec": "1.7.0",
+    "@opencode-ai/plugin": "1.18.18"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.11",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "keywords": [
+    "opencode",
+    "ddd",
+    "openspec",
+    "eventstorming"
+  ],
+  "license": "UNLICENSED"
+}
