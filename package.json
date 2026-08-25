@@ -1,0 +1,34 @@
+{
+  "name": "opencode-ddd-plugin-v2",
+  "version": "0.1.0",
+  "description": "Lightweight OpenCode SDK plugin for DDD/OpenSpec workflows. LLM-friendly state machine + skills.",
+  "type": "module",
+  "exports": "./dist/index.js",
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "resources/**/*.json",
+    "skills/**/*.md",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "prepack": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@fission-ai/openspec": "1.7.0",
+    "@opencode-ai/plugin": "1.18.18",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.11",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "keywords": ["opencode", "ddd", "openspec", "eventstorming"],
+  "license": "UNLICENSED"
+}

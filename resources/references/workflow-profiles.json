@@ -1,0 +1,1262 @@
+{
+  "schemaVersion": "1.20",
+  "profiles": {
+    "add-feature": {
+      "title": "Bottom-up DDD Feature Delivery",
+      "skill": "ddd-deliver-feature",
+      "artifactBase": "openspec/changes",
+      "artifactSubdir": "ddd",
+      "artifactLanguage": "zh-CN",
+      "designConformanceContract": true,
+      "strategicBaselineContract": true,
+      "stages": [
+        {
+          "id": "00-request",
+          "skills": [
+            "ddd-orchestrate",
+            "ddd-openspec-bridge"
+          ],
+          "openSpecAction": "new-change",
+          "required": [],
+          "checklist": [
+            "The request describes one independently valuable feature.",
+            "The existing repository and intended user outcome are explicit."
+          ],
+          "document": "milestoneI"
+        },
+        {
+          "id": "01-current-evidence",
+          "skills": [
+            "ddd-deliver-feature"
+          ],
+          "required": [],
+          "checklist": [
+            "事实、假设与待确认项是否分开，并由代码调用链、契约、Schema、测试或运行结果支持？",
+            "是否形成可执行验收约束、现状代码证据索引和验证基线，而不提前决定战略或战术模型？",
+            "现有消费者、持久化、集成、兼容与回滚约束是否明确？",
+            "是否完整扫描当前正式 OpenSpec specs 与所有历史 DDD change，并恢复相关战略决策？"
+          ],
+          "strategicBaselineGate": "inventory",
+          "qualityContract": {
+            "minSectionChars": 600,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "事实、假设与待确认项",
+              "可执行验收约束",
+              "现状代码证据索引",
+              "验证基线",
+              "OpenSpec历史战略基线"
+            ]
+          },
+          "document": "milestoneI",
+          "scopeContract": {
+            "id": "existing-system-baseline"
+          }
+        },
+        {
+          "id": "02-big-picture-event-storm",
+          "skills": [
+            "ddd-scope",
+            "ddd-discover"
+          ],
+          "humanGate": true,
+          "criticalGate": "strategic-eventstorm",
+          "adviceRequired": true,
+          "reviewTitle": "确认新增功能的战略事件风暴",
+          "required": [],
+          "checklist": [
+            "系统级用户场景、主流程、异常与补偿路径是否完整且符合业务认知？",
+            "事件风暴图例是否明确区分参与者、命令、过去时领域事件、策略与规则、读模型、外部系统和热点？",
+            "每个查询是否只通过 returns 形成读模型，每个领域事件是否证明业务主体状态变化或真实后续策略，而不是把查询/界面结果改写为过去时？",
+            "每个未决问题是否通过 blocks 指向受影响结论，并确保这些结论尚未进入主流程、本次目标或唯一输出？",
+            "外部参与方是否具有系统边界之外的证据，现有能力是否由 operational 且可达的事实证明而非桩或类型声明？",
+            "事件时间线是否澄清与本功能直接相关的顺序、可见性、状态、权限、幂等及异常恢复语义？",
+            "现状已有能力、本次目标能力和未来候选能力是否明确区分，是否存在把邻接系统尚不存在的能力带入基础交付的情况？",
+            "是否给出了遗漏场景、边界聚类和业务演进方向的多种建议及推荐理由？"
+          ],
+          "intentIntegrityContract": {
+            "capabilityLabels": [
+              "现状已存在",
+              "本次目标",
+              "未来候选"
+            ],
+            "futureCapabilityPolicy": "未来候选不得进入本次主流程、基础交付或验收标准，除非用户在本里程碑明确批准扩大范围。"
+          },
+          "qualityContract": {
+            "minSectionChars": 1200,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "事件风暴图例",
+              "事件时间线",
+              "命令与参与者",
+              "策略与规则",
+              "读模型",
+              "异常与补偿",
+              "热点与未决问题",
+              "能力状态分类",
+              "现状已存在",
+              "本次目标",
+              "未来候选"
+            ]
+          },
+          "document": "milestoneI",
+          "scopeContract": {
+            "id": "system-discovery"
+          }
+        },
+        {
+          "id": "03-strategic-impact",
+          "skills": [
+            "ddd-subdomains",
+            "ddd-contexts",
+            "ddd-context-map"
+          ],
+          "required": [],
+          "checklist": [
+            "每项业务能力、行为和数据是否只有一个子域、限界上下文和实现单元 Owner？",
+            "职责与数据所有权、部署映射、依赖方向和边界契约是否明确？",
+            "是否形成允许修改与保护边界，以及职责—实现单元映射，而没有越级设计聚合、类、表或文件？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 800,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "职责与数据所有权",
+              "部署映射",
+              "允许修改与保护边界",
+              "职责—实现单元映射",
+              "历史战略基线影响"
+            ]
+          },
+          "document": "milestoneII",
+          "scopeContract": {
+            "id": "system-strategy"
+          }
+        },
+        {
+          "id": "04-service-use-cases",
+          "skills": [
+            "ddd-context-use-cases"
+          ],
+          "humanGate": true,
+          "criticalGate": "strategic-design",
+          "adviceRequired": true,
+          "strategicBaselineGate": "decision-delta",
+          "reviewTitle": "确认新增功能的业务归属与现有架构落位",
+          "required": [],
+          "checklist": [
+            "功能归属的子域、限界上下文和现有或已批准的部署单元是否符合业务认知？",
+            "单体项目是否保持单体并落实为模块边界；只有现有或已批准拓扑为微服务时才使用微服务落位？",
+            "每个实现单元用例是否给出业务命令、前置条件、业务结果、失败语义和可观察验收标准？",
+            "跨边界协作、契约所有权、数据所有权和一致性语义是否完整？",
+            "是否形成可直接输入战术事件风暴的业务用例包，而没有提前指定聚合、服务、仓储、DTO、表或文件？",
+            "历史战略决策是否逐项标明复用或变更，本次新增决策与影响是否清楚且无未决冲突？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 1200,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "业务用例包",
+              "业务验收标准",
+              "职责与协作契约",
+              "战略—战术输入包",
+              "战略基线继承矩阵"
+            ]
+          },
+          "document": "milestoneII",
+          "scopeContract": {
+            "id": "system-strategy"
+          }
+        },
+        {
+          "id": "05-design-level-event-storm",
+          "skills": [
+            "ddd-discover"
+          ],
+          "humanGate": true,
+          "criticalGate": "tactical-eventstorm",
+          "adviceRequired": true,
+          "reviewTitle": "确认新增功能的战术事件风暴",
+          "required": [],
+          "checklist": [
+            "Design-Level EventStorming 是否只消费一个已批准的实现单元用例包，并限制在该实现单元和限界上下文内？",
+            "每个验收标准是否具有命令—策略—事件—读模型追踪，并明确拒绝结果？",
+            "失败矩阵、不变量候选、事务边界、并发与持久化热点是否足以直接驱动战术设计？",
+            "是否明确区分战略层集成事件与上下文内部领域事件，并在战术设计前独立留痕？",
+            "是否给出了不变量、聚合边界和一致性策略的多个候选方向及推荐理由？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 1400,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "命令—策略—事件—读模型追踪",
+              "失败矩阵",
+              "不变量候选",
+              "事务边界与并发热点",
+              "持久化热点"
+            ]
+          },
+          "document": "milestoneIII",
+          "scopeContract": {
+            "id": "context-discovery"
+          }
+        },
+        {
+          "id": "06-tactical-design",
+          "skills": [
+            "ddd-application-services",
+            "ddd-aggregates",
+            "ddd-domain-interactions",
+            "ddd-persistence-design"
+          ],
+          "adviceRequired": true,
+          "required": [],
+          "checklist": [
+            "关键业务规则、不变量和失败处理是否符合真实业务？",
+            "聚合、实体、领域服务和应用服务的职责是否容易理解且没有重复？",
+            "公开接口与 DTO 契约、应用服务签名、聚合行为和仓储语义签名是否明确？",
+            "持久化查询/迁移、测试场景和实现文件映射是否足以直接进入 Coding？",
+            "所有本次必做模型是否具有稳定 ME/INV 编号、唯一职责、生产/测试路径和验收归属，并且不再以候选或建议表述？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 1600,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "公开接口与 DTO 契约",
+              "应用服务签名",
+              "聚合行为与不变量",
+              "仓储语义签名",
+              "持久化查询与迁移",
+              "测试场景与实现文件映射",
+              "模块目录与层级归属",
+              "允许与禁止依赖矩阵",
+              "Published Language 与循环依赖约束",
+              "批准战术模型实现清单",
+              "不变量—模型—测试归属",
+              "禁止实现降级"
+            ]
+          },
+          "document": "milestoneIV",
+          "scopeContract": {
+            "id": "context-tactical-design"
+          }
+        },
+        {
+          "id": "07-model-review",
+          "skills": [
+            "ddd-model-review"
+          ],
+          "humanGate": true,
+          "criticalGate": "tactical-design",
+          "adviceRequired": true,
+          "reviewTitle": "确认新增功能的业务规则、领域模型与实施一致性",
+          "required": [],
+          "checklist": [
+            "关键业务规则、不变量、失败处理和聚合职责是否符合真实业务？",
+            "应用服务、领域服务、仓储与持久化边界是否能够完整实现已批准用例？",
+            "纵向追踪、契约、签名、持久化、测试和实现映射是否完整？",
+            "每项发现是否给出证据、阻塞级别、归属阶段和纠正动作？",
+            "只有阻塞项为零时才能写出“实施就绪判定：Ready”。",
+            "是否已审计所有 ME/INV 的实现形式、专用路径和测试，阻止 Controller/Service/Mapper 吞并已批准的领域职责？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 1000,
+            "minSummaryChars": 20,
+            "implementationReady": true,
+            "requiredContent": [
+              "评分总览",
+              "阻塞项",
+              "纵向追踪缺口",
+              "纠正动作",
+              "战术模型实现合同审计",
+              "实施就绪判定：Ready"
+            ]
+          },
+          "document": "milestoneIV",
+          "scopeContract": {
+            "id": "context-tactical-design"
+          }
+        },
+        {
+          "id": "08-roadmap",
+          "skills": [
+            "ddd-roadmap",
+            "ddd-openspec-bridge"
+          ],
+          "openspecArtifactGate": true,
+          "openSpecAction": "planning-artifacts",
+          "deliveryAssetGate": true,
+          "humanGate": true,
+          "reviewTitle": "确认新增功能的交付范围与实施顺序",
+          "required": [],
+          "checklist": [
+            "每个增量是否都能产生用户或业务可观察的结果？",
+            "每个纵向切片是否绑定验收标准、真实消费者、预期生产/测试文件和验证命令？",
+            "每个本次必做 ME/INV 是否绑定到切片和专用生产/测试路径，model-contract.json 是否与批准的里程碑 IV 哈希一致？",
+            "Git 基线、兼容、迁移、上线和回滚策略是否可执行？",
+            "本次要做与暂不做的范围以及偏离文件映射时的处理是否清楚？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 1000,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "纵向切片—验收—文件映射",
+              "战术模型—切片—文件覆盖",
+              "model-contract.json",
+              "模块—层—依赖机器合同",
+              "架构验证命令",
+              "验证命令",
+              "Git 基线与回滚策略",
+              "OpenSpec change 映射",
+              "OpenSpec Requirement/Scenario 追踪"
+            ]
+          },
+          "document": "milestoneV",
+          "scopeContract": {
+            "id": "delivery-planning"
+          }
+        },
+        {
+          "id": "09-implementation",
+          "skills": [
+            "ddd-develop",
+            "ddd-git-delivery",
+            "ddd-openspec-bridge"
+          ],
+          "repeatable": true,
+          "implementationEvidence": true,
+          "openspecTaskTracking": true,
+          "openSpecAction": "apply",
+          "required": [],
+          "checklist": [
+            "实际生产代码和变更测试是否组成一个接入真实消费者的完整纵向切片？",
+            "实现证据是否绑定当前 model-contract.json，并准确列出本切片落地的 ME/INV，且没有未经批准的设计偏离？",
+            "验收标准与不变量的测试覆盖是否完整，必需测试层级是否全部通过？",
+            "E2E 是否通过真实 consumer 与业务路径运行，而不是以 mock 替代业务链路？",
+            "验证命令、运行/集成证据、Git 精确范围和独立 Commit 是否真实且通过？",
+            "兼容性、回滚与 Commit SHA 是否已记录？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 500,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "实际代码增量",
+              "设计一致性证据",
+              "架构一致性证据",
+              "测试覆盖与必需层级证据",
+              "E2E 真实链路证据",
+              "验证结果",
+              "Commit SHA",
+              "兼容性与回滚"
+            ]
+          },
+          "document": "milestoneVI",
+          "scopeContract": {
+            "id": "approved-slice-implementation"
+          }
+        },
+        {
+          "id": "10-final-review",
+          "skills": [
+            "ddd-model-review",
+            "ddd-openspec-bridge"
+          ],
+          "humanGate": true,
+          "requiresCompletedImplementation": true,
+          "openspecArchiveGate": true,
+          "openSpecAction": "verify-archive",
+          "reviewTitle": "验收新增功能",
+          "required": [],
+          "checklist": [
+            "最终验收证据矩阵是否把每个场景绑定到真实消费者、生产代码、测试、运行结果和 Commit SHA？",
+            "关键业务规则、异常场景、兼容性和回滚要求是否得到验证？",
+            "批准的全部 ME/INV 是否具有真实代码与测试证据，战术模型覆盖率是否达到 100%，且设计偏离为空？",
+            "测试覆盖是否完整、必需测试层级是否全部通过、E2E 真实链路是否通过？",
+            "重构前后行为对比：不适用（本工作流不是重构）；是否已明确记录？",
+            "是否还有会阻止上线的业务或模型问题？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 800,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "最终验收证据矩阵",
+              "设计—代码一致性矩阵",
+              "架构依赖扫描",
+              "战术模型覆盖率：100%",
+              "测试覆盖完整",
+              "必需测试层级通过",
+              "E2E 真实链路通过",
+              "重构前后行为对比：不适用",
+              "未完成项",
+              "上线与回滚建议"
+            ]
+          },
+          "document": "milestoneVI",
+          "scopeContract": {
+            "id": "acceptance-evidence"
+          }
+        }
+      ],
+      "documentBase": ".",
+      "documents": {
+        "milestoneI": "I-strategic-eventstorm.md",
+        "milestoneII": "II-strategic-design.md",
+        "milestoneIII": "III-tactical-eventstorm.md",
+        "milestoneIV": "IV-tactical-design.md",
+        "milestoneV": "V-delivery-plan.md",
+        "milestoneVI": "VI-final-acceptance.md"
+      },
+      "documentTitles": {
+        "milestoneI": "里程碑 I：战略事件风暴",
+        "milestoneII": "里程碑 II：战略设计",
+        "milestoneIII": "里程碑 III：战术事件风暴",
+        "milestoneIV": "里程碑 IV：战术设计",
+        "milestoneV": "里程碑 V：交付计划",
+        "milestoneVI": "里程碑 VI：最终验收"
+      },
+      "milestones": [
+        {
+          "roman": "I",
+          "document": "milestoneI",
+          "title": "战略事件风暴"
+        },
+        {
+          "roman": "II",
+          "document": "milestoneII",
+          "title": "战略设计"
+        },
+        {
+          "roman": "III",
+          "document": "milestoneIII",
+          "title": "战术事件风暴"
+        },
+        {
+          "roman": "IV",
+          "document": "milestoneIV",
+          "title": "战术设计"
+        },
+        {
+          "roman": "V",
+          "document": "milestoneV",
+          "title": "交付计划"
+        },
+        {
+          "roman": "VI",
+          "document": "milestoneVI",
+          "title": "最终验收"
+        }
+      ]
+    },
+    "refactor-system": {
+      "title": "Bottom-up DDD System Refactoring",
+      "skill": "ddd-refactor-system",
+      "artifactBase": "openspec/changes",
+      "artifactSubdir": "ddd",
+      "artifactLanguage": "zh-CN",
+      "designConformanceContract": true,
+      "strategicBaselineContract": true,
+      "stages": [
+        {
+          "id": "00-request",
+          "skills": [
+            "ddd-orchestrate",
+            "ddd-openspec-bridge"
+          ],
+          "openSpecAction": "new-change",
+          "required": [],
+          "checklist": [
+            "The existing repository and refactoring objective are explicit.",
+            "Preserved behaviors and measurable improvement goals are named."
+          ],
+          "document": "milestoneI"
+        },
+        {
+          "id": "01-refactoring-scope-convergence",
+          "stepNumber": "01",
+          "skills": [
+            "ddd-scope",
+            "ddd-refactor-system"
+          ],
+          "required": [],
+          "checklist": [
+            "Project-wide aspiration, this workflow's bounded objective, preserved behavior, non-goals, and completion semantics are explicit.",
+            "Candidate end-to-end refactoring seams are supported by repository evidence and compared before one recommended seam is selected."
+          ],
+          "qualityContract": {
+            "minSectionChars": 900,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "项目级愿景与本轮范围",
+              "保留行为与非目标",
+              "候选重构切面",
+              "推荐试点切面",
+              "本轮完成与项目完成口径"
+            ]
+          },
+          "document": "milestoneI",
+          "scopeContract": {
+            "id": "refactor-scope-convergence"
+          }
+        },
+        {
+          "id": "01-baseline-evidence",
+          "stepNumber": "02",
+          "legacyStepNumbers": [
+            "01"
+          ],
+          "skills": [
+            "ddd-refactor-system"
+          ],
+          "required": [],
+          "checklist": [
+            "Architecture, runtime paths, schemas, integrations, and ownership are supported by evidence.",
+            "Characterization tests or equivalent observations protect current behavior.",
+            "Unknowns are distinguished from facts.",
+            "Current OpenSpec specs and every prior DDD change are inventoried with relevant strategic decisions recovered."
+          ],
+          "strategicBaselineGate": "inventory",
+          "qualityContract": {
+            "minSectionChars": 700,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "现状行为与保护证据",
+              "OpenSpec历史战略基线",
+              "历史决策与未决冲突"
+            ]
+          },
+          "document": "milestoneI",
+          "scopeContract": {
+            "id": "existing-system-baseline"
+          }
+        },
+        {
+          "id": "02-as-is-big-picture-event-storm",
+          "stepNumber": "03",
+          "legacyStepNumbers": [
+            "02"
+          ],
+          "skills": [
+            "ddd-discover"
+          ],
+          "humanGate": true,
+          "criticalGate": "strategic-eventstorm",
+          "adviceRequired": true,
+          "reviewTitle": "确认现状战略事件风暴",
+          "required": [],
+          "checklist": [
+            "项目级愿景、本轮重构范围和推荐试点切面是否清楚，是否同意本轮不代表整个项目已经完成重构？",
+            "恢复的用户场景、真实事件流、数据变化和异常路径是否与现状一致？",
+            "查询结果、界面观察和拒绝结果是否与领域事件严格区分，事件是否具有业务主体状态变化或真实策略消费者？",
+            "现状不确定项是否通过 blocks 保持为候选，内部能力是否未被误称为外部系统，现状能力声明是否未超过证据等级？",
+            "核心流程、耦合、语言冲突、职责候选和一致性热点是否完整？",
+            "是否给出了可保留、可拆分和应优先治理的多种方向及推荐理由？"
+          ],
+          "document": "milestoneI",
+          "scopeContract": {
+            "id": "system-discovery"
+          }
+        },
+        {
+          "id": "03-target-strategy",
+          "stepNumber": "04",
+          "legacyStepNumbers": [
+            "03"
+          ],
+          "skills": [
+            "ddd-subdomains",
+            "ddd-contexts",
+            "ddd-context-map"
+          ],
+          "required": [],
+          "checklist": [
+            "Target subsystem, context, and service boundaries are justified by business language, responsibilities, event flow, and change cadence.",
+            "Current-to-target ownership and integration changes are explicit.",
+            "The context-to-microservice mapping is explicit and non-mechanical."
+          ],
+          "qualityContract": {
+            "minSectionChars": 800,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "目标职责与所有权",
+              "当前—目标边界变化",
+              "历史战略基线影响"
+            ]
+          },
+          "document": "milestoneII",
+          "scopeContract": {
+            "id": "system-strategy"
+          }
+        },
+        {
+          "id": "04-service-use-cases",
+          "stepNumber": "05",
+          "legacyStepNumbers": [
+            "04"
+          ],
+          "skills": [
+            "ddd-context-use-cases"
+          ],
+          "humanGate": true,
+          "criticalGate": "strategic-design",
+          "adviceRequired": true,
+          "strategicBaselineGate": "decision-delta",
+          "reviewTitle": "确认目标业务边界与服务职责",
+          "required": [],
+          "checklist": [
+            "目标子系统、微服务和限界上下文的职责是否符合业务认知？",
+            "需要保留的现有行为是否都被目标服务用例覆盖？",
+            "服务间事件、数据所有权和术语边界是否清楚？",
+            "是否比较了多种目标边界和迁移策略，并给出推荐、代价与演进路径？",
+            "历史战略决策是否逐项标明复用或变更，本轮新增决策与影响是否清楚且无未决冲突？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 1000,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "目标实现单元业务用例",
+              "行为保护追踪",
+              "战略基线继承矩阵"
+            ]
+          },
+          "document": "milestoneII",
+          "scopeContract": {
+            "id": "system-strategy"
+          }
+        },
+        {
+          "id": "05-pilot-design-level-event-storm",
+          "stepNumber": "06",
+          "legacyStepNumbers": [
+            "05"
+          ],
+          "skills": [
+            "ddd-discover"
+          ],
+          "humanGate": true,
+          "criticalGate": "tactical-eventstorm",
+          "adviceRequired": true,
+          "reviewTitle": "确认试点战术事件风暴",
+          "required": [],
+          "checklist": [
+            "试点实现单元是否足够小、具有业务价值，并暴露真实的架构接缝？",
+            "Design-Level EventStorming 是否消费已批准的用例，覆盖实现单元内部的主路径、异常路径和回滚路径，并在战术设计前独立留痕？",
+            "是否给出了不变量、聚合边界、一致性和迁移接缝的多个候选方向及推荐理由？"
+          ],
+          "document": "milestoneIII",
+          "scopeContract": {
+            "id": "context-discovery"
+          }
+        },
+        {
+          "id": "06-pilot-tactical-design",
+          "stepNumber": "07",
+          "legacyStepNumbers": [
+            "06"
+          ],
+          "skills": [
+            "ddd-application-services",
+            "ddd-aggregates",
+            "ddd-domain-interactions",
+            "ddd-persistence-design"
+          ],
+          "humanGate": true,
+          "criticalGate": "tactical-design",
+          "adviceRequired": true,
+          "reviewTitle": "确认试点服务的领域模型",
+          "required": [],
+          "checklist": [
+            "试点模型是否表达了真实业务规则并保留必要的外部行为？",
+            "聚合、实体、领域服务和应用服务的职责是否合理？",
+            "新旧数据共存、一致性和迁移方式是否可接受？",
+            "模块目录、层级归属、允许/禁止依赖和 Published Language 是否清楚？",
+            "批准模型是否具有 ME/INV 编号、生产/测试路径和遗留例外移除归属？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 1400,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "应用服务与领域模型",
+              "聚合行为与不变量",
+              "持久化与迁移",
+              "模块目录与层级归属",
+              "允许与禁止依赖矩阵",
+              "Published Language 与循环依赖约束",
+              "批准战术模型实现清单",
+              "不变量—模型—测试归属",
+              "遗留架构例外与移除计划"
+            ]
+          },
+          "document": "milestoneIV",
+          "scopeContract": {
+            "id": "context-tactical-design"
+          }
+        },
+        {
+          "id": "07-migration-roadmap",
+          "stepNumber": "08",
+          "legacyStepNumbers": [
+            "07"
+          ],
+          "skills": [
+            "ddd-roadmap",
+            "ddd-openspec-bridge"
+          ],
+          "humanGate": true,
+          "openspecArtifactGate": true,
+          "openSpecAction": "planning-artifacts",
+          "deliveryAssetGate": true,
+          "reviewTitle": "确认重构迁移计划",
+          "required": [],
+          "checklist": [
+            "每个迁移增量是否可以独立验证和安全回退？",
+            "新旧路径能否在迁移期间安全共存？",
+            "迁移顺序、停止条件、兼容要求和业务风险是否清楚？",
+            "model-contract.json 是否绑定批准的战术设计、ME/INV、模块层级与依赖规则？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 1000,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "迁移纵向切片",
+              "行为保护与回滚",
+              "model-contract.json",
+              "模块—层—依赖机器合同",
+              "架构验证命令",
+              "OpenSpec change 映射"
+            ]
+          },
+          "document": "milestoneV",
+          "scopeContract": {
+            "id": "delivery-planning"
+          }
+        },
+        {
+          "id": "08-implementation",
+          "stepNumber": "09",
+          "legacyStepNumbers": [
+            "08"
+          ],
+          "skills": [
+            "ddd-develop",
+            "ddd-git-delivery",
+            "ddd-openspec-bridge"
+          ],
+          "repeatable": true,
+          "implementationEvidence": true,
+          "openspecTaskTracking": true,
+          "openSpecAction": "apply",
+          "required": [],
+          "checklist": [
+            "The slice preserves approved behavior while moving one real path.",
+            "Characterization and target-model tests pass.",
+            "验收标准与不变量的测试覆盖是否完整，必需测试层级是否全部通过？",
+            "E2E 是否通过真实 consumer 与业务路径运行，而不是以 mock 替代业务链路？",
+            "相同场景在 baselineSha 与 implementationSha 上的前后行为对比是否通过且无未批准差异？",
+            "Rollback and migration state are observable.",
+            "设计一致性与架构一致性证据均绑定当前 model-contract.json。"
+          ],
+          "qualityContract": {
+            "minSectionChars": 500,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "实际代码增量",
+              "设计一致性证据",
+              "架构一致性证据",
+              "测试覆盖与必需层级证据",
+              "E2E 真实链路证据",
+              "重构前后行为对比证据",
+              "验证结果",
+              "Commit SHA",
+              "兼容性与回滚"
+            ]
+          },
+          "document": "milestoneVI",
+          "scopeContract": {
+            "id": "approved-slice-implementation"
+          }
+        },
+        {
+          "id": "09-model-review",
+          "stepNumber": "10",
+          "legacyStepNumbers": [
+            "09"
+          ],
+          "skills": [
+            "ddd-model-review"
+          ],
+          "required": [],
+          "checklist": [
+            "No blocking model drift or boundary violation remains.",
+            "Migration findings route back to a named stage."
+          ],
+          "document": "milestoneVI",
+          "scopeContract": {
+            "id": "acceptance-evidence"
+          }
+        },
+        {
+          "id": "10-final-review",
+          "stepNumber": "11",
+          "legacyStepNumbers": [
+            "10"
+          ],
+          "skills": [
+            "ddd-model-review",
+            "ddd-openspec-bridge"
+          ],
+          "humanGate": true,
+          "requiresCompletedImplementation": true,
+          "openspecArchiveGate": true,
+          "openSpecAction": "verify-archive",
+          "reviewTitle": "验收本轮 DDD 重构",
+          "required": [],
+          "checklist": [
+            "需要保留的业务行为是否全部得到验证？",
+            "目标边界是否真正降低了耦合并明确了职责？",
+            "遗留退出、监控、回滚和后续所有权是否清楚？",
+            "全部 ME/INV 是否覆盖，模块依赖扫描是否通过，批准的遗留例外是否未扩大？",
+            "测试覆盖是否完整、必需测试层级是否全部通过、E2E 真实链路是否通过？",
+            "重构前后的相同业务场景是否完成行为对比并且没有未批准差异？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 800,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "最终验收证据矩阵",
+              "设计—代码一致性矩阵",
+              "架构依赖扫描",
+              "战术模型覆盖率：100%",
+              "测试覆盖完整",
+              "必需测试层级通过",
+              "E2E 真实链路通过",
+              "重构前后行为对比通过",
+              "遗留例外收敛结果",
+              "上线与回滚建议"
+            ]
+          },
+          "document": "milestoneVI",
+          "scopeContract": {
+            "id": "acceptance-evidence"
+          }
+        }
+      ],
+      "documentBase": ".",
+      "documents": {
+        "milestoneI": "I-strategic-eventstorm.md",
+        "milestoneII": "II-strategic-design.md",
+        "milestoneIII": "III-tactical-eventstorm.md",
+        "milestoneIV": "IV-tactical-design.md",
+        "milestoneV": "V-delivery-plan.md",
+        "milestoneVI": "VI-final-acceptance.md"
+      },
+      "documentTitles": {
+        "milestoneI": "里程碑 I：战略事件风暴",
+        "milestoneII": "里程碑 II：战略设计",
+        "milestoneIII": "里程碑 III：战术事件风暴",
+        "milestoneIV": "里程碑 IV：战术设计",
+        "milestoneV": "里程碑 V：交付计划",
+        "milestoneVI": "里程碑 VI：最终验收"
+      },
+      "milestones": [
+        {
+          "roman": "I",
+          "document": "milestoneI",
+          "title": "战略事件风暴"
+        },
+        {
+          "roman": "II",
+          "document": "milestoneII",
+          "title": "战略设计"
+        },
+        {
+          "roman": "III",
+          "document": "milestoneIII",
+          "title": "战术事件风暴"
+        },
+        {
+          "roman": "IV",
+          "document": "milestoneIV",
+          "title": "战术设计"
+        },
+        {
+          "roman": "V",
+          "document": "milestoneV",
+          "title": "交付计划"
+        },
+        {
+          "roman": "VI",
+          "document": "milestoneVI",
+          "title": "最终验收"
+        }
+      ]
+    },
+    "create-system": {
+      "title": "Top-down DDD System Creation",
+      "skill": "ddd-create-system",
+      "artifactBase": "openspec/changes",
+      "artifactSubdir": "ddd",
+      "artifactLanguage": "zh-CN",
+      "designConformanceContract": true,
+      "stages": [
+        {
+          "id": "00-request",
+          "skills": [
+            "ddd-orchestrate",
+            "ddd-openspec-bridge"
+          ],
+          "openSpecAction": "new-change",
+          "required": [],
+          "checklist": [
+            "The new product/system intent and initial stakeholders are explicit.",
+            "No existing production behavior is incorrectly assumed."
+          ],
+          "document": "milestoneI"
+        },
+        {
+          "id": "01-system-scenarios",
+          "skills": [
+            "ddd-scope"
+          ],
+          "required": [],
+          "checklist": [
+            "System-level user scenarios cover actors, goals, outcomes, and exceptions.",
+            "Priorities, non-goals, constraints, and success measures are explicit."
+          ],
+          "document": "milestoneI"
+        },
+        {
+          "id": "02-big-picture-event-storm",
+          "skills": [
+            "ddd-discover"
+          ],
+          "humanGate": true,
+          "criticalGate": "strategic-eventstorm",
+          "adviceRequired": true,
+          "reviewTitle": "确认新系统的战略事件风暴",
+          "required": [],
+          "checklist": [
+            "优先用户场景、主流程、异常与补偿路径是否完整且符合业务目标？",
+            "核心事件、外部系统、策略、时间触发器、热点和职责候选是否清晰？",
+            "查询是否通过 returns 形成读模型，状态改变是否通过 emits 产生真实领域事件，未决项是否通过 blocks 保持在主流程之外？",
+            "内部职责、外部参与方和时间触发器是否按边界性质正确区分？",
+            "是否给出了业务能力聚类、遗漏场景和演进机会的多种建议及推荐理由？"
+          ],
+          "document": "milestoneI",
+          "scopeContract": {
+            "id": "system-discovery"
+          }
+        },
+        {
+          "id": "03-subdomains",
+          "skills": [
+            "ddd-subdomains"
+          ],
+          "required": [],
+          "checklist": [
+            "Capabilities are classified by business differentiation rather than technical layers.",
+            "Core, supporting, and generic classifications have explicit reasons."
+          ],
+          "document": "milestoneII",
+          "scopeContract": {
+            "id": "system-strategy"
+          }
+        },
+        {
+          "id": "04-bounded-contexts",
+          "skills": [
+            "ddd-contexts"
+          ],
+          "required": [],
+          "checklist": [
+            "Every context has responsibilities, non-responsibilities, language, data ownership, and team ownership.",
+            "Terminology conflicts are resolved or explicitly translated."
+          ],
+          "document": "milestoneII",
+          "scopeContract": {
+            "id": "system-strategy"
+          }
+        },
+        {
+          "id": "05-context-map",
+          "skills": [
+            "ddd-context-map"
+          ],
+          "required": [],
+          "checklist": [
+            "Every cross-service interaction has direction, contract ownership, failure handling, and versioning.",
+            "Subsystems, service responsibilities, and context-to-microservice deployment choices are explicit and justified separately from semantic boundaries."
+          ],
+          "document": "milestoneII",
+          "scopeContract": {
+            "id": "system-strategy"
+          }
+        },
+        {
+          "id": "06-service-use-cases",
+          "skills": [
+            "ddd-context-use-cases"
+          ],
+          "humanGate": true,
+          "criticalGate": "strategic-design",
+          "adviceRequired": true,
+          "reviewTitle": "确认新系统的业务边界与服务职责",
+          "required": [],
+          "checklist": [
+            "核心用户场景是否都分配到了明确的子系统、微服务和限界上下文？",
+            "服务间事件、数据所有权、业务术语和职责边界是否符合业务认知？",
+            "每个微服务得到的用例需求是否完整且没有重复职责？",
+            "是否比较了多种上下文与部署映射方案，并给出推荐、代价和未来演进空间？"
+          ],
+          "document": "milestoneII",
+          "scopeContract": {
+            "id": "system-strategy"
+          }
+        },
+        {
+          "id": "07-design-level-event-storm",
+          "skills": [
+            "ddd-discover"
+          ],
+          "repeatable": true,
+          "cycleGroup": "microservice-tactical-cycle",
+          "humanGate": true,
+          "criticalGate": "tactical-eventstorm",
+          "adviceRequired": true,
+          "reviewTitle": "确认新系统的战术事件风暴",
+          "required": [],
+          "checklist": [
+            "是否明确选定一个实现单元、其限界上下文和已批准用例作为范围？",
+            "Design-Level EventStorming 是否识别应用命令、领域事件、策略、失败、模型候选和事务/存储热点，并在战术设计前独立留痕？",
+            "是否给出了不变量、聚合边界和一致性策略的多个候选方向及推荐理由？"
+          ],
+          "document": "milestoneIII",
+          "scopeContract": {
+            "id": "context-discovery"
+          }
+        },
+        {
+          "id": "08-tactical-design",
+          "skills": [
+            "ddd-application-services",
+            "ddd-aggregates",
+            "ddd-domain-interactions",
+            "ddd-persistence-design"
+          ],
+          "repeatable": true,
+          "cycleGroup": "microservice-tactical-cycle",
+          "adviceRequired": true,
+          "required": [],
+          "checklist": [
+            "应用服务是否完整实现已批准的实现单元用例，而不是只覆盖最短成功路径？",
+            "聚合、领域服务、领域事件和一致性边界是否有备选方案、利弊与推荐理由？",
+            "持久化、可靠消息、查询模型和可观测性是否保持上下文所有权，并为演进留出空间？",
+            "每个实现单元的模块目录、层级归属、依赖方向、Published Language 和禁止循环规则是否明确？",
+            "批准模型是否具有 ME/INV 编号及唯一生产/测试路径归属？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 1600,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "应用服务与领域模型",
+              "聚合行为与不变量",
+              "持久化与集成",
+              "模块目录与层级归属",
+              "允许与禁止依赖矩阵",
+              "Published Language 与循环依赖约束",
+              "批准战术模型实现清单",
+              "不变量—模型—测试归属"
+            ]
+          },
+          "document": "milestoneIV",
+          "scopeContract": {
+            "id": "context-tactical-design"
+          }
+        },
+        {
+          "id": "09-architecture-review",
+          "skills": [
+            "ddd-model-review"
+          ],
+          "humanGate": true,
+          "criticalGate": "tactical-design",
+          "adviceRequired": true,
+          "reviewTitle": "确认新系统的战术领域模型与架构一致性",
+          "required": [],
+          "checklist": [
+            "优先业务场景是否都有完整的战略和战术设计？",
+            "关键业务规则、聚合和领域服务是否符合业务认知？",
+            "服务间协作是否存在职责冲突、语义冲突或阻断问题？",
+            "模块目录、层级归属、依赖方向、Published Language 和循环依赖约束是否完整？",
+            "所有阻塞问题是否已经修正，最终战术模型是否具备进入交付规划的条件？"
+          ],
+          "document": "milestoneIV",
+          "scopeContract": {
+            "id": "context-tactical-design"
+          }
+        },
+        {
+          "id": "10-roadmap",
+          "skills": [
+            "ddd-roadmap",
+            "ddd-openspec-bridge"
+          ],
+          "humanGate": true,
+          "openspecArtifactGate": true,
+          "openSpecAction": "planning-artifacts",
+          "deliveryAssetGate": true,
+          "reviewTitle": "确认新系统的首期交付计划",
+          "required": [],
+          "checklist": [
+            "Walking Skeleton 是否能验证最关键的跨服务业务流程？",
+            "每个纵向切片是否交付可观察的业务结果？",
+            "首期范围、实施顺序、依赖和暂缓内容是否清楚？",
+            "model-contract.json 是否绑定批准战术设计、ME/INV、模块层级、依赖规则和架构验证命令？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 1000,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "Walking Skeleton 与纵向切片",
+              "战术模型—切片—文件覆盖",
+              "model-contract.json",
+              "模块—层—依赖机器合同",
+              "架构验证命令",
+              "OpenSpec change 映射"
+            ]
+          },
+          "document": "milestoneV",
+          "scopeContract": {
+            "id": "delivery-planning"
+          }
+        },
+        {
+          "id": "11-implementation",
+          "skills": [
+            "ddd-develop",
+            "ddd-git-delivery",
+            "ddd-openspec-bridge"
+          ],
+          "repeatable": true,
+          "implementationEvidence": true,
+          "openspecTaskTracking": true,
+          "openSpecAction": "apply",
+          "required": [],
+          "checklist": [
+            "The iteration delivers one production-wired observable behavior.",
+            "Tests, operational evidence, and compatibility match the approved design.",
+            "验收标准与不变量的测试覆盖是否完整，必需测试层级是否全部通过？",
+            "E2E 是否通过真实 consumer 与业务路径运行，而不是以 mock 替代业务链路？",
+            "设计一致性与架构一致性证据均绑定当前 model-contract.json。"
+          ],
+          "qualityContract": {
+            "minSectionChars": 500,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "实际代码增量",
+              "设计一致性证据",
+              "架构一致性证据",
+              "测试覆盖与必需层级证据",
+              "E2E 真实链路证据",
+              "验证结果",
+              "Commit SHA",
+              "兼容性与回滚"
+            ]
+          },
+          "document": "milestoneVI",
+          "scopeContract": {
+            "id": "approved-slice-implementation"
+          }
+        },
+        {
+          "id": "12-final-review",
+          "skills": [
+            "ddd-model-review",
+            "ddd-openspec-bridge"
+          ],
+          "humanGate": true,
+          "requiresCompletedImplementation": true,
+          "openspecArchiveGate": true,
+          "openSpecAction": "verify-archive",
+          "reviewTitle": "验收新系统首期交付",
+          "required": [],
+          "checklist": [
+            "优先用户场景是否可以端到端运行和观察？",
+            "关键业务规则、异常流程和服务协作是否得到验证？",
+            "上线、监控、回滚、所有权和后续范围是否清楚？",
+            "批准的全部 ME/INV 是否覆盖，模块依赖扫描与循环依赖检查是否通过？",
+            "测试覆盖是否完整、必需测试层级是否全部通过、E2E 真实链路是否通过？",
+            "重构前后行为对比：不适用（本工作流不是重构）；是否已明确记录？"
+          ],
+          "qualityContract": {
+            "minSectionChars": 800,
+            "minSummaryChars": 20,
+            "requiredContent": [
+              "最终验收证据矩阵",
+              "设计—代码一致性矩阵",
+              "架构依赖扫描",
+              "战术模型覆盖率：100%",
+              "测试覆盖完整",
+              "必需测试层级通过",
+              "E2E 真实链路通过",
+              "重构前后行为对比：不适用",
+              "上线与回滚建议"
+            ]
+          },
+          "document": "milestoneVI",
+          "scopeContract": {
+            "id": "acceptance-evidence"
+          }
+        }
+      ],
+      "documentBase": ".",
+      "documents": {
+        "milestoneI": "I-strategic-eventstorm.md",
+        "milestoneII": "II-strategic-design.md",
+        "milestoneIII": "III-tactical-eventstorm.md",
+        "milestoneIV": "IV-tactical-design.md",
+        "milestoneV": "V-delivery-plan.md",
+        "milestoneVI": "VI-final-acceptance.md"
+      },
+      "documentTitles": {
+        "milestoneI": "里程碑 I：战略事件风暴",
+        "milestoneII": "里程碑 II：战略设计",
+        "milestoneIII": "里程碑 III：战术事件风暴",
+        "milestoneIV": "里程碑 IV：战术设计",
+        "milestoneV": "里程碑 V：交付计划",
+        "milestoneVI": "里程碑 VI：最终验收"
+      },
+      "milestones": [
+        {
+          "roman": "I",
+          "document": "milestoneI",
+          "title": "战略事件风暴"
+        },
+        {
+          "roman": "II",
+          "document": "milestoneII",
+          "title": "战略设计"
+        },
+        {
+          "roman": "III",
+          "document": "milestoneIII",
+          "title": "战术事件风暴"
+        },
+        {
+          "roman": "IV",
+          "document": "milestoneIV",
+          "title": "战术设计"
+        },
+        {
+          "roman": "V",
+          "document": "milestoneV",
+          "title": "交付计划"
+        },
+        {
+          "roman": "VI",
+          "document": "milestoneVI",
+          "title": "最终验收"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,131 @@
+export type WorkflowType = "add-feature" | "refactor-system" | "create-system"
+export type ReviewDecision = "approve" | "revise" | "reject"
+export type OpenSpecArtifact = "proposal" | "specs" | "design" | "tasks" | "apply"
+export type LifecycleAction = "init" | "prepare" | "submit" | "review" | "status" | "archive" | "openspec"
+
+export interface StageContract {
+  id: string
+  document: string
+  skills?: string[]
+  checklist?: string[]
+  humanGate?: boolean
+  criticalGate?: string
+  adviceRequired?: boolean
+  reviewTitle?: string
+  repeatable?: boolean
+  cycleGroup?: string
+  openspecArtifactGate?: boolean
+  openspecTaskTracking?: boolean
+  openspecArchiveGate?: boolean
+  openSpecAction?: string
+  deliveryAssetGate?: boolean
+  implementationEvidence?: boolean
+  requiresCompletedImplementation?: boolean
+  qualityContract?: { minSectionChars?: number; minSummaryChars?: number; requiredContent?: string[] }
+  scopeContract?: { id: string }
+  [key: string]: unknown
+}
+
+export interface MilestoneContract {
+  roman: string
+  document: string
+  title: string
+}
+
+export interface WorkflowProfile {
+  title: string
+  skill: string
+  artifactBase: string
+  artifactSubdir?: string
+  artifactLanguage?: string
+  stages: StageContract[]
+  milestones: MilestoneContract[]
+  strategicBaselineContract?: boolean
+  designConformanceContract?: boolean
+  documents: Record<string, string>
+  documentTitles: Record<string, string>
+  [key: string]: unknown
+}
+
+export interface ReviewRecord {
+  decision: ReviewDecision
+  reviewer: string
+  reviewedAt: string
+  feedback: string
+}
+
+export interface Checkpoint {
+  checkpointId: number
+  stage: string
+  milestone: string
+  summary: string
+  status: "completed" | "awaiting_review" | "approved" | "revision_requested" | "rejected" | "superseded"
+  review: ReviewRecord | null
+  reviewTitle?: string
+  reviewChecklist: string[]
+  adviceRequired: boolean
+  document: string
+  completedAt: string
+  plannedSlices?: number
+  completedSlices?: number
+  sliceId?: string
+}
+
+export interface WorkflowState {
+  schemaVersion: string
+  workflowType: WorkflowType
+  workflowId: string
+  title: string
+  originalRequest?: string
+  projectRoot: string
+  artifactRoot: string
+  status: "active" | "revision_requested" | "rejected" | "awaiting_archive" | "complete"
+  currentStage: string
+  createdAt: string
+  updatedAt: string
+  checkpoints: Checkpoint[]
+  openSpec?: { changeId?: string; archivedAt?: string; status?: string }
+  [key: string]: unknown
+}
+
+export interface Transition {
+  schemaVersion: "ddd-workflow-transition/v1"
+  workflowStatus: string
+  lastCompletedStage: string | null
+  stageRole: "not-started" | "milestone-building" | "human-gate" | "complete" | "blocked" | "archive"
+  milestoneRoman: string | null
+  milestoneTitle: string | null
+  milestoneReady: boolean
+  milestoneStatus: string
+  documentRole: "cumulative-working-document" | "human-review-document" | "none"
+  humanReviewRequired: boolean
+  mustContinue: boolean
+  stopAllowed: boolean
+  stopReason: string | null
+  nextStage: string | null
+  allowedNextStages: string[]
+  nextHumanGate: string | null
+  requiredAction: "continue" | "select-next-stage" | "await-human-review" | "revise" | "stop" | "archive" | "complete"
+  message: string
+}
+
+export interface ValidationFinding {
+  code: string
+  path: string
+  message: string
+  severity: "blocking" | "warning"
+  suggestion?: string
+}
+
+export class WorkflowError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "WorkflowError"
+  }
+}
+
+export interface Identity {
+  workflowType: WorkflowType
+  workflowId: string
+  projectRoot: string
+}

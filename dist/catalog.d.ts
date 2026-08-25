@@ -1,0 +1,12 @@
+import type { StageContract, WorkflowProfile, WorkflowType } from "./types.js";
+export declare function profiles(): Promise<Record<string, WorkflowProfile>>;
+export declare function documents(): Promise<any>;
+export declare function profileFor(type: WorkflowType): Promise<WorkflowProfile>;
+export declare function stageContract(profile: WorkflowProfile, stageId: string): StageContract;
+export declare function stageIndex(profile: WorkflowProfile, stageId: string): number;
+export declare function milestoneFor(profile: WorkflowProfile, document: string | undefined): import("./types.js").MilestoneContract | null;
+export declare function writersOf(profile: WorkflowProfile, document: string): StageContract[];
+export declare function nextHumanGateAfter(profile: WorkflowProfile, afterIndex: number): string | null;
+export declare function documentFileName(profile: WorkflowProfile, document: string): string;
+export declare const stageTitles: Record<string, string>;
+export declare const stageTitle: (stage: StageContract) => string;
