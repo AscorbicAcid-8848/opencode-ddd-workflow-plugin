@@ -38,16 +38,100 @@ async function resolveActiveIdentity(ctx, workflowType, workflowId) {
     throw new Error(`当前项目有多个活动 DDD change（${candidates.join("、")}），请显式传 workflow_type 与 workflow_id。`);
 }
 const out = (v) => JSON.stringify(v, null, 2);
+const lifecycleTool = tool({
+    description: "DDD 工作流生命周期控制器。唯一用于推进 DDD 六里程碑工作流的工具。action 取值：init|prepare|submit|review|status|archive|openspec。始终依据返回的 transition 决定下一步，不要从文件推断状态。",
+    args: {
+        action: lifecycleAction,
+        workflow_type: workflowType.optional().describe("init 必填；其余当项目仅有一个活动 change 时可省略。"),
+        workflow_id: reqText().optional().describe("init 必填；其余当项目仅有一个活动 change 时可省略。"),
+        project_root: tool.schema.string().optional().describe("项目根目录，默认取会话 worktree。"),
+        input: tool.schema.record(tool.schema.string(), tool.schema.any()).optional().describe("动作载荷。init:{title,request}; prepare:{stage?}; submit:{stage,summary,sections}; review:{stage,decision,reviewer,feedback?}; status:{view?}; archive:{}; openspec:{artifact}。"),
+    },
+    async execute(args, context) {
+        try {
+            const ctx = { worktree: context.worktree, directory: context.directory };
+            if (args.action === "init") {
+                const i = args.input;
+                if (!args.workflow_type || !args.workflow_id || !i?.title || !i?.request) {
+                    return out({ error: "init 需要 workflow_type、workflow_id 和 input.{title,request}。" });
+                }
+                return out(await initialize({ workflowType: args.workflow_type, workflowId: args.workflow_id, projectRoot: projectRoot(args, ctx), title: i.title, request: i.request }));
+            }
+            const id = await resolveActiveIdentity(ctx, args.workflow_type, args.workflow_id);
+            if (args.action === "prepare") {
+                const i = args.input ?? {};
+                return out(await prepare({ ...id, stage: i.stage }));
+            }
+            if (args.action === "submit") {
+                const i = args.input;
+                if (!i?.stage || !i?.summary || !i?.sections) {
+                    return out({ error: "submit 需要 input.{stage,summary,sections}。" });
+                }
+                return out(await submit({ ...id, stage: i.stage, summary: i.summary, sections: i.sections, plannedSlices: i.plannedSlices, sliceId: i.sliceId }));
+            }
+            if (args.action === "review") {
+                const i = args.input;
+                if (!i?.stage || !i?.decision || !i?.reviewer) {
+                    return out({ error: "review 需要 input.{stage,decision,reviewer}。" });
+                }
+                return out(await review({ ...id, stage: i.stage, decision: i.decision, reviewer: i.reviewer, feedback: i.feedback }));
+            }
+            if (args.action === "status") {
+                const i = args.input ?? {};
+                return out(await status({ ...id, view: i.view }));
+            }
+            if (args.action === "archive")
+                return out(await archive(id));
+            if (args.action === "openspec") {
+                const i = args.input;
+                if (!i?.artifact)
+                    return out({ error: "openspec 需要 input.artifact。" });
+                return out(await openspec({ ...id, artifact: i.artifact }));
+            }
+            return out({ error: `未知 action：${args.action}` });
+        }
+        catch (error) {
+            return out({ error: error.message, errorType: error.name });
+        }
+    },
+});
+export const dddLifecycleTool = lifecycleTool;
 export const DddWorkflowPlugin = async (pluginInput) => {
+    const dddSessions = new Set();
+    const evidenceCalls = new Map();
+    const evidenceTools = new Set(["read", "glob", "grep"]);
     return {
         async config(config) {
             // soft: no hard restrictions injected into host config
         },
         async "command.execute.before"(input) {
-            // mark DDD sessions for soft protection only
+            if (input.command === "ddd")
+                dddSessions.add(input.sessionID);
         },
         async "tool.execute.before"(input, hookOutput) {
             const args = hookOutput.args;
+            if (input.tool === "skill" && args?.name === "ddd-orchestrate")
+                dddSessions.add(input.sessionID);
+            if (dddSessions.has(input.sessionID) && (input.tool === "ddd_lifecycle" || input.tool === "mcp")) {
+                if (args?.action === "prepare" && args?.input?.stage === "01-current-evidence") {
+                    evidenceCalls.set(input.sessionID, 0);
+                }
+                if (args?.action === "submit" && args?.input?.stage === "01-current-evidence") {
+                    evidenceCalls.delete(input.sessionID);
+                }
+            }
+            if (evidenceCalls.has(input.sessionID)) {
+                if (["subagent", "workflow_run", "todowrite"].includes(input.tool)) {
+                    throw new Error("DDD_EVIDENCE_TOOL_DENIED: 现状证据阶段禁止子代理、工作流扇出和探索 Todo；请在当前短事务内完成定向取证。");
+                }
+                if (evidenceTools.has(input.tool)) {
+                    const used = evidenceCalls.get(input.sessionID) ?? 0;
+                    if (used >= 8) {
+                        throw new Error("DDD_EVIDENCE_BUDGET_EXHAUSTED: 本阶段 8 次定向仓库调用预算已用完。不得重试或扩大搜索；请把未证明内容记录为 evidence gap 并立即 submit。");
+                    }
+                    evidenceCalls.set(input.sessionID, used + 1);
+                }
+            }
             // Soft protection: warn (not hard-stop) when editing milestone docs directly.
             if (input.tool === "edit" || input.tool === "write" || input.tool === "apply_patch" || input.tool === "patch" || input.tool === "multiedit") {
                 const target = String(args?.filePath ?? args?.path ?? "");
@@ -57,65 +141,29 @@ export const DddWorkflowPlugin = async (pluginInput) => {
                 }
             }
         },
+        async "tool.execute.after"(input, hookOutput) {
+            if (!dddSessions.has(input.sessionID) || (input.tool !== "ddd_lifecycle" && input.tool !== "mcp"))
+                return;
+            const request = input.args ?? {};
+            if (request.action !== "prepare")
+                return;
+            try {
+                const raw = hookOutput.output;
+                const result = typeof raw === "string" ? JSON.parse(raw) : raw;
+                if (result?.stageCard?.scopeContractId === "existing-system-baseline") {
+                    evidenceCalls.set(input.sessionID, 0);
+                }
+                else if (result?.stageCard) {
+                    evidenceCalls.delete(input.sessionID);
+                }
+            }
+            catch {
+                // The explicit-stage path in before remains authoritative when a host
+                // wraps display output. Do not guess a phase from unparseable output.
+            }
+        },
         tool: {
-            ddd_lifecycle: tool({
-                description: "DDD 工作流生命周期控制器。唯一用于推进 DDD 六里程碑工作流的工具。action 取值：init|prepare|submit|review|status|archive|openspec。始终依据返回的 transition 决定下一步，不要从文件推断状态。",
-                args: {
-                    action: lifecycleAction,
-                    workflow_type: workflowType.optional().describe("init 必填；其余当项目仅有一个活动 change 时可省略。"),
-                    workflow_id: reqText().optional().describe("init 必填；其余当项目仅有一个活动 change 时可省略。"),
-                    project_root: tool.schema.string().optional().describe("项目根目录，默认取会话 worktree。"),
-                    input: tool.schema.record(tool.schema.string(), tool.schema.any()).optional().describe("动作载荷。init:{title,request}; prepare:{stage?}; submit:{stage,summary,sections}; review:{stage,decision,reviewer,feedback?}; status:{view?}; archive:{}; openspec:{artifact}。"),
-                },
-                async execute(args, context) {
-                    try {
-                        const ctx = { worktree: context.worktree, directory: context.directory };
-                        if (args.action === "init") {
-                            const i = args.input;
-                            if (!args.workflow_type || !args.workflow_id || !i?.title || !i?.request) {
-                                return out({ error: "init 需要 workflow_type、workflow_id 和 input.{title,request}。" });
-                            }
-                            return out(await initialize({ workflowType: args.workflow_type, workflowId: args.workflow_id, projectRoot: projectRoot(args, ctx), title: i.title, request: i.request }));
-                        }
-                        const id = await resolveActiveIdentity(ctx, args.workflow_type, args.workflow_id);
-                        if (args.action === "prepare") {
-                            const i = args.input ?? {};
-                            return out(await prepare({ ...id, stage: i.stage }));
-                        }
-                        if (args.action === "submit") {
-                            const i = args.input;
-                            if (!i?.stage || !i?.summary || !i?.sections) {
-                                return out({ error: "submit 需要 input.{stage,summary,sections}。" });
-                            }
-                            return out(await submit({ ...id, stage: i.stage, summary: i.summary, sections: i.sections, plannedSlices: i.plannedSlices, sliceId: i.sliceId }));
-                        }
-                        if (args.action === "review") {
-                            const i = args.input;
-                            if (!i?.stage || !i?.decision || !i?.reviewer) {
-                                return out({ error: "review 需要 input.{stage,decision,reviewer}。" });
-                            }
-                            return out(await review({ ...id, stage: i.stage, decision: i.decision, reviewer: i.reviewer, feedback: i.feedback }));
-                        }
-                        if (args.action === "status") {
-                            const i = args.input ?? {};
-                            return out(await status({ ...id, view: i.view }));
-                        }
-                        if (args.action === "archive") {
-                            return out(await archive(id));
-                        }
-                        if (args.action === "openspec") {
-                            const i = args.input;
-                            if (!i?.artifact)
-                                return out({ error: "openspec 需要 input.artifact。" });
-                            return out(await openspec({ ...id, artifact: i.artifact }));
-                        }
-                        return out({ error: `未知 action：${args.action}` });
-                    }
-                    catch (error) {
-                        return out({ error: error.message, errorType: error.name });
-                    }
-                },
-            }),
+            ddd_lifecycle: dddLifecycleTool,
         },
     };
 };

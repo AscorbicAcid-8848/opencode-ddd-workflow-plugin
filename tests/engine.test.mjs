@@ -4,6 +4,8 @@ import { mkdtemp, rm, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { initialize, prepare, submit, review, status } from "../dist/engine.js"
+import mobileTool from "../dist/mobile-tools.js"
+import { DddWorkflowPlugin } from "../dist/index.js"
 
 async function freshProject() {
   return mkdtemp(path.join(tmpdir(), "ddd-v2-"))
@@ -51,9 +53,87 @@ test("prepare returns a stage card for the next stage", async () => {
     assert.equal(p.stageCard.stageId, "01-current-evidence")
     assert.ok(p.stageCard.checklist.length > 0)
     assert.equal(p.stageCard.humanGate, false)
+    assert.deepEqual(p.stageCard.skills, [])
+    assert.ok(p.stageCard.allowedSectionHeadings.includes("输入场景与现状事实"))
+    assert.ok(!p.stageCard.allowedSectionHeadings.includes("事实、假设与待确认项"))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test("submit blocks headings outside the milestone template and nested level-two headings", async () => {
+  const dir = await freshProject()
+  try {
+    await initialize({ workflowType: "add-feature", workflowId: "headings", projectRoot: dir, title: "t", request: "r" })
+    const r = await submit({
+      workflowType: "add-feature", workflowId: "headings", projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary,
+      sections: {
+        "事实、假设与待确认项": "不应作为二级标题",
+        "输入场景与现状事实": "## 输入场景与现状事实\n### 事实\n正文",
+      },
+    })
+    assert.ok(r.findings.some((f) => f.code === "SECTION_HEADING_NOT_IN_TEMPLATE" && f.severity === "blocking"))
+    assert.ok(r.findings.some((f) => f.code === "NESTED_LEVEL_TWO_HEADING" && f.severity === "blocking"))
+    assert.equal(r.lastCompletedStage, "00-request")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("Mobile adapter exports the same lightweight lifecycle tool", () => {
+  assert.equal(typeof mobileTool.execute, "function")
+  assert.match(mobileTool.description, /唯一用于推进 DDD 六里程碑工作流/)
+})
+
+test("plugin enforces the evidence-stage repository call budget", async () => {
+  const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
+  const sessionID = "budget-test"
+  await plugin["command.execute.before"]({ command: "ddd", sessionID }, {})
+  await plugin["tool.execute.before"](
+    { tool: "mcp", sessionID, callID: "prepare" },
+    { args: { action: "prepare", input: { stage: "01-current-evidence" } } },
+  )
+  for (let i = 0; i < 8; i++) {
+    await plugin["tool.execute.before"](
+      { tool: "grep", sessionID, callID: `grep-${i}` },
+      { args: { pattern: "Shop" } },
+    )
+  }
+  await assert.rejects(
+    plugin["tool.execute.before"](
+      { tool: "read", sessionID, callID: "read-9" },
+      { args: { filePath: "Shop.java" } },
+    ),
+    /DDD_EVIDENCE_BUDGET_EXHAUSTED/,
+  )
+})
+
+test("plugin activates the evidence budget when prepare infers the stage", async () => {
+  const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
+  const sessionID = "inferred-budget-test"
+  await plugin["command.execute.before"]({ command: "ddd", sessionID }, {})
+  await plugin["tool.execute.before"](
+    { tool: "mcp", sessionID, callID: "prepare" },
+    { args: { action: "prepare", input: {} } },
+  )
+  await plugin["tool.execute.after"](
+    { tool: "mcp", sessionID, callID: "prepare", args: { action: "prepare", input: {} } },
+    { output: JSON.stringify({ stageCard: { scopeContractId: "existing-system-baseline" } }) },
+  )
+  for (let i = 0; i < 8; i++) {
+    await plugin["tool.execute.before"](
+      { tool: "glob", sessionID, callID: `glob-${i}` },
+      { args: { pattern: "*.java" } },
+    )
+  }
+  await assert.rejects(
+    plugin["tool.execute.before"](
+      { tool: "grep", sessionID, callID: "grep-9" },
+      { args: { pattern: "Shop" } },
+    ),
+    /DDD_EVIDENCE_BUDGET_EXHAUSTED/,
+  )
 })
 
 test("submit advances to next stage and writes document sections", async () => {

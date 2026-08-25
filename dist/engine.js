@@ -3,7 +3,7 @@ import { exists, now } from "./fs.js";
 import { profileFor, stageContract, stageIndex, milestoneFor, stageTitle } from "./catalog.js";
 import { loadState, saveState, workflowRoot, statePath } from "./state.js";
 import { workflowTransition } from "./transition.js";
-import { ensureSkeleton, publishSections, documentPath, documentFileName } from "./documents.js";
+import { ensureSkeleton, publishSections, documentPath, documentFileName, sectionsFor, overviewSubsections } from "./documents.js";
 import { newChange, writeLink, verifyArchive, openSpecAction } from "./openspec.js";
 import { WorkflowError } from "./types.js";
 async function resolveRoot(id) {
@@ -70,6 +70,11 @@ export async function prepare(input) {
     const stage = stageContract(profile, stageId);
     const milestone = milestoneFor(profile, stage.document);
     const upstream = collectUpstream(state, stage.document);
+    const allowedSectionHeadings = [
+        ...Object.keys(overviewSubsections()),
+        ...(await sectionsFor(stage.document)).map((section) => section.heading),
+        "业务验收记录",
+    ];
     const stageCard = {
         stageId: stage.id,
         stageTitle: stageTitle(stage),
@@ -81,20 +86,33 @@ export async function prepare(input) {
         adviceRequired: Boolean(stage.adviceRequired),
         repeatable: Boolean(stage.repeatable),
         cycleGroup: stage.cycleGroup ?? null,
-        skills: stage.skills ?? [],
+        // v2 is intentionally self-contained. Returning v1 stage skills here makes
+        // hosts load incompatible submission protocols into the same model turn.
+        skills: [],
         checklist: stage.checklist ?? [],
         reviewTitle: stage.reviewTitle ?? null,
         reviewChecklist: stage.humanGate ? (stage.checklist ?? []) : [],
         upstreamSummary: upstream,
         qualityContract: stage.qualityContract ?? null,
         scopeContractId: stage.scopeContract?.id ?? null,
+        ...(stage.scopeContract?.id === "existing-system-baseline" ? {
+            evidenceBudget: {
+                maxRepositoryCalls: 8,
+                rules: [
+                    "先按业务关键词定位，再读取直接相关的小文件或局部行；禁止读取整个大型 SQL、日志或历史目录。",
+                    "禁止派遣子代理、建立探索 Todo 或遍历全仓库；证据不足时明确记录 evidence gap。",
+                    "OpenSpec 只检查当前 specs 索引及与本能力关键词匹配的历史 change，不扫描无关 change。",
+                ],
+            },
+        } : {}),
         submitFormat: {
             stage: stage.id,
             summary: "本阶段一句话结论（>=20 字）",
-            sections: { "章节标题": "对应里程碑文档的 ## 章节 Markdown 正文" },
+            sections: { "<allowedSectionHeadings 中的精确标题>": "只写该二级章节正文；可含 ### 小节，禁止再写 ## 标题" },
             ...(stage.implementationEvidence ? { sliceId: "当前切片稳定 ID" } : {}),
             ...(stage.deliveryAssetGate ? { plannedSlices: "计划切片数量" } : {}),
         },
+        allowedSectionHeadings,
         nextActionHint: stage.humanGate
             ? "提交后形成人工里程碑，等待人工 review(approve/revise/reject)。"
             : "提交后继续下一阶段，无需人工验收。",
@@ -110,7 +128,7 @@ export async function submit(input) {
     const { root, profile } = await resolveRoot(input);
     const state = await loadState(root);
     const stage = stageContract(profile, input.stage);
-    const findings = validateSubmission(profile, stage, input);
+    const findings = await validateSubmission(profile, stage, input);
     if (findings.some((f) => f.severity === "blocking")) {
         return { ...workflowTransition(profile, state), findings, documentPath: documentPath(root, profile, stage.document) };
     }
@@ -142,7 +160,7 @@ export async function submit(input) {
     const transition = workflowTransition(profile, state);
     return { ...transition, findings, documentPath: documentPath(root, profile, stage.document) };
 }
-function validateSubmission(profile, stage, input) {
+async function validateSubmission(profile, stage, input) {
     const findings = [];
     if (!input.summary || input.summary.trim().length < (stage.qualityContract?.minSummaryChars ?? 20)) {
         findings.push({ code: "SUMMARY_TOO_SHORT", path: "summary", severity: "blocking",
@@ -151,13 +169,31 @@ function validateSubmission(profile, stage, input) {
     if (!input.sections || Object.keys(input.sections).length === 0) {
         findings.push({ code: "SECTIONS_EMPTY", path: "sections", severity: "blocking", message: "sections 不能为空。" });
     }
+    const allowedHeadings = new Set([
+        ...Object.keys(overviewSubsections()),
+        ...(await sectionsFor(stage.document)).map((section) => section.heading),
+        "业务验收记录",
+    ]);
+    for (const [heading, content] of Object.entries(input.sections ?? {})) {
+        if (!allowedHeadings.has(heading)) {
+            findings.push({
+                code: "SECTION_HEADING_NOT_IN_TEMPLATE", path: `sections.${heading}`, severity: "blocking",
+                message: `章节标题「${heading}」不在正式里程碑模板中。只能使用：${[...allowedHeadings].join("、")}。`,
+            });
+        }
+        if (/^##\s+/mu.test(content)) {
+            findings.push({
+                code: "NESTED_LEVEL_TWO_HEADING", path: `sections.${heading}`, severity: "blocking",
+                message: `章节「${heading}」正文不得再次包含 ## 标题；运行时会生成二级标题，正文只可使用 ### 或更低级标题。`,
+            });
+        }
+    }
     const minChars = stage.qualityContract?.minSectionChars;
     if (minChars) {
-        for (const [heading, content] of Object.entries(input.sections)) {
-            if (content.trim().length < minChars) {
-                findings.push({ code: "SECTION_TOO_SHORT", path: `sections.${heading}`, severity: "warning",
-                    message: `章节「${heading}」正文仅 ${content.trim().length} 字，建议 >= ${minChars} 字。` });
-            }
+        const total = Object.values(input.sections ?? {}).join("\n").trim().length;
+        if (total < minChars) {
+            findings.push({ code: "SECTIONS_TOTAL_TOO_SHORT", path: "sections", severity: "warning",
+                message: `本阶段全部章节正文共 ${total} 字，建议总计 >= ${minChars} 字。` });
         }
     }
     const required = stage.qualityContract?.requiredContent;

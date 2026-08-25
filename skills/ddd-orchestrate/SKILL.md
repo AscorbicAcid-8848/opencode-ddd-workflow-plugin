@@ -45,7 +45,7 @@ While `transition.requiredAction` is `continue` or `select-next-stage`:
    ```
    Read the returned `stageCard`. It tells you: stage id/title, milestone, checklist, skills to load, quality contract, and the exact `submitFormat`.
 
-2. **Do the work** described by the checklist. Load the skills listed in `stageCard.skills` when helpful. Use read/grep/glob to inspect the repo for evidence stages; design freely for design stages.
+2. **Do the work** described by the checklist. Load only the skills listed in `stageCard.skills`. For evidence stages, obey `stageCard.evidenceBudget`: combine related terms into one targeted search, then read only relevant files or line windows; never dump an entire large SQL/log/history file, spawn subagents, or create exploration todos. The host hard-stops repository call 9; never retry a denied call. Missing proof becomes an explicit evidence gap instead of wider exploration. Design freely for design stages.
 
 3. **Submit** with the format from `stageCard.submitFormat`:
    ```json
@@ -58,7 +58,7 @@ While `transition.requiredAction` is `continue` or `select-next-stage`:
      }
    }
    ```
-   - `sections` keys must match `## ` headings in the milestone document (e.g. `一页结论`, `业务主题与分析范围`).
+   - `sections` keys must come from `stageCard.allowedSectionHeadings` and match the milestone template's `## ` headings exactly (e.g. `一页结论`, `业务主题与分析范围`). Put `###` subsections inside the value; never repeat a `##` heading in the value.
    - If `findings` contains **blocking** items, fix and submit again. **warning** items are advisory.
    - The runtime writes your `sections` into the milestone document and records a checkpoint.
    - For implementation stages, also pass `sliceId`. For delivery-plan stages, pass `plannedSlices`.
@@ -107,3 +107,4 @@ Keep decisions in order: scenarios → Big Picture EventStorming → strategic d
 - `workflow_type` + `workflow_id` are required on `init`; later calls may omit them when the project has exactly one active change.
 - Roman numerals (I–VI) are human labels; pass the exact internal stage id (e.g. `02-big-picture-event-storm`) returned by `status`/`transition`.
 - If you only have a Roman label from the user, call `status` first with `view="compact"`, then use the returned `nextHumanGate` as the `review.stage`.
+- Keep one stage transaction compact. Do not announce or attempt parallel exploration; the lifecycle already supplies the complete stage contract.
