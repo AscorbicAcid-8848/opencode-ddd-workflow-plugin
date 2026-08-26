@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { initialize, prepare, submit, review, status, block, archive, hasFailedVerificationEvidence, containsRequiredConcept, extractApprovedModelContract, queryPseudoEvents, validateStageSemantics } from "../dist/engine.js"
+import { initialize, prepare, submit, review, status, block, archive, hasFailedVerificationEvidence, containsRequiredConcept, extractApprovedModelContract, queryPseudoEvents, requiresScenarioClarification, validateStageSemantics } from "../dist/engine.js"
 import { DddWorkflowPlugin, dddLifecycleTool, lifecycleFinalizeMetadata, normalizeReviewDecision } from "../dist/index.js"
 import { renderSections, unfilledHeadings } from "../dist/documents.js"
 import { newChange, openSpecAction, planningArtifacts, runOpenSpec, verifyArchive } from "../dist/openspec.js"
@@ -218,9 +218,17 @@ async function completeMilestoneI(dir, workflowId) {
   const requiredConcepts = p.stageCard.qualityContract.requiredContent.join("、")
   const sections = Object.fromEntries(p.stageCard.unfilledSectionHeadings.map((heading) => [heading,
     `### ${heading}结论\n围绕用户目标梳理业务参与者、命令、已经发生的业务事件、规则、异常、补偿、时间约束、读模型和边界线索。本次目标与未来候选明确分离，未决问题不会进入主流程。阶段概念覆盖：${requiredConcepts}。`]))
+  if (p.stageCard.ambiguityContract) {
+    sections["战略事件风暴"] += "\n\n候选场景 A：参与者发起业务动作后形成候选业务事件。\n候选场景 B：外部业务事实到达后形成另一条候选事件流。\n人工确认前，任何候选均不进入本次目标或主流程。"
+  }
   return submit({
     workflowType: "add-feature", workflowId, projectRoot: dir,
     stage: "02-big-picture-event-storm", summary: longSummary, sections,
+    ...(p.stageCard.ambiguityContract ? { ambiguityResolution: {
+      status: "unresolved",
+      candidates: [{ id: "candidate-a", label: "参与者主动发起" }, { id: "candidate-b", label: "外部事实触发" }],
+      affectedDecisions: ["触发条件"],
+    } } : {}),
   })
 }
 
@@ -488,6 +496,37 @@ test("strategic event storm blocks technical design leakage", async () => {
   }
 })
 
+test("capability-only requests require human choice between candidate event flows", () => {
+  assert.equal(requiresScenarioClarification("新增用户一日光顾店铺轨迹功能"), true)
+  assert.equal(requiresScenarioClarification("当用户成功查看店铺详情后记录一次访问，并支持查询当天记录"), false)
+  const state = { originalRequest: "新增用户一日光顾店铺轨迹功能" }
+  const stage = { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } }
+  const premature = validateStageSemantics(state, stage, {
+    stage: stage.id,
+    summary: "选择查看店铺详情作为唯一触发路径。",
+    sections: {
+      "一页结论": "用户查看店铺详情后自动记录光顾。",
+      "战略事件风暴": "用户 → 查看店铺详情 → 光顾已记录。",
+    },
+  })
+  assert.ok(premature.some((finding) => finding.code === "AMBIGUOUS_SCENARIO_PREMATURE_COMMITMENT"))
+
+  const candidates = validateStageSemantics(state, stage, {
+    stage: stage.id,
+    summary: "并列呈现两套待选择的业务解释。",
+    sections: {
+      "一页结论": "触发与结果尚待人工确认。",
+      "战略事件风暴": "候选场景 A：用户实际到店 → 光顾已发生。\n候选场景 B：用户查看详情 → 浏览已发生。\n人工确认前，候选均不进入本次目标或主流程。",
+    },
+    ambiguityResolution: {
+      status: "unresolved",
+      candidates: [{ id: "physical", label: "实际到店" }, { id: "browse", label: "页面浏览" }],
+      affectedDecisions: ["光顾触发条件"],
+    },
+  })
+  assert.ok(!candidates.some((finding) => finding.code === "AMBIGUOUS_SCENARIO_PREMATURE_COMMITMENT"))
+})
+
 test("strategic event storm rejects query completion presented as a domain event", async () => {
   const dir = await freshProject()
   try {
@@ -628,6 +667,58 @@ test("Mobile adapter mode exposes the lifecycle directly through the native SDK"
   assert.equal(config.mcp, undefined)
   assert.deepEqual(Object.keys(plugin.tool), ["ddd_lifecycle"])
   assert.equal(plugin.tool.ddd_lifecycle, dddLifecycleTool)
+})
+
+test("DDD command binds the exact user request over model-expanded init input", async () => {
+  const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
+  const sessionID = "exact-command-intent"
+  const original = "新增用户一日光顾店铺轨迹功能"
+  await plugin["command.execute.before"]({ command: "ddd", sessionID, arguments: original }, { parts: [] })
+  const hookOutput = {
+    args: {
+      action: "init",
+      workflow_type: "add-feature",
+      workflow_id: "intent-bound",
+      input: {
+        title: "用户轨迹",
+        request: `${original}。目标：记录进店离店事件。排除项：不做实时推送。`,
+      },
+    },
+  }
+  await plugin["tool.execute.before"]({ tool: "ddd_lifecycle", sessionID, callID: "init" }, hookOutput)
+  assert.equal(hookOutput.args.input.request, original)
+  assert.equal(hookOutput.args.input.title, "用户轨迹")
+})
+
+test("DDD command repairs JSON-string init input without changing the exact request", async () => {
+  const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
+  const sessionID = "exact-string-intent"
+  const original = "重构店铺查询模块"
+  await plugin["command.execute.before"]({ command: "ddd", sessionID, arguments: `  ${original}  ` }, { parts: [] })
+  const hookOutput = {
+    args: {
+      action: "init",
+      workflow_type: "refactor-system",
+      workflow_id: "intent-string-bound",
+      input: JSON.stringify({ title: "店铺查询重构", request: "重构整个项目并拆分微服务" }),
+    },
+  }
+  await plugin["tool.execute.before"]({ tool: "ddd_lifecycle", sessionID, callID: "init" }, hookOutput)
+  assert.deepEqual(hookOutput.args.input, { title: "店铺查询重构", request: original })
+})
+
+test("direct lifecycle init remains compatible when no DDD command request is bound", async () => {
+  const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
+  const hookOutput = {
+    args: {
+      action: "init",
+      workflow_type: "create-system",
+      workflow_id: "direct-init",
+      input: { title: "直接初始化", request: "创建会员系统" },
+    },
+  }
+  await plugin["tool.execute.before"]({ tool: "ddd_lifecycle", sessionID: "direct-init-session", callID: "init" }, hookOutput)
+  assert.equal(hookOutput.args.input.request, "创建会员系统")
 })
 
 test("lifecycle binds an initialized change to its Mobile session", async () => {
@@ -943,7 +1034,15 @@ test("review revise bypasses approval validation and a corrected resubmit restor
     await prepare({ workflowType: "add-feature", workflowId: "rv-invalid", projectRoot: dir, stage: "02-big-picture-event-storm" })
     const resubmitted = await submit({ workflowType: "add-feature", workflowId: "rv-invalid", projectRoot: dir,
       stage: "02-big-picture-event-storm", summary: longSummary,
-      sections: { "一页结论": "当前结论基于系统级业务事件流，不包含任何技术实现决策。" } })
+      sections: {
+        "一页结论": "当前结论基于系统级业务事件流，不包含任何技术实现决策。",
+        "战略事件风暴": "候选场景 A：参与者发起业务动作后形成候选业务事件。\n候选场景 B：外部业务事实到达后形成另一条候选事件流。\n人工确认前，任何候选均不进入本次目标或主流程。",
+      },
+      ambiguityResolution: {
+        status: "unresolved",
+        candidates: [{ id: "candidate-a", label: "参与者主动发起" }, { id: "candidate-b", label: "外部事实触发" }],
+        affectedDecisions: ["触发条件"],
+      } })
     assert.equal(resubmitted.workflowStatus, "active")
     assert.equal(resubmitted.requiredAction, "await-human-review")
     const resubmittedDoc = await readFile(docPath, "utf8")

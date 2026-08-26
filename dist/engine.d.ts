@@ -12,6 +12,7 @@ export interface SubmitInput extends Identity {
     summary: string;
     sections: Record<string, string>;
     claims?: unknown;
+    ambiguityResolution?: unknown;
     plannedSlices?: number;
     sliceId?: string;
     finalize?: boolean;
@@ -39,6 +40,7 @@ export interface OpenSpecInput extends Identity {
     capability?: string;
     skipSpecs?: boolean;
 }
+export declare function requiresScenarioClarification(request: string): boolean;
 export declare function initialize(input: InitInput): Promise<Transition & {
     workflowId: string;
 }>;

@@ -161,7 +161,7 @@ const lifecycleTool = tool({
         input: tool.schema.union([
             tool.schema.record(tool.schema.string(), tool.schema.any()),
             tool.schema.string(),
-        ]).optional().describe("载荷对象；兼容模型误把完整 JSON 对象编码成字符串。init:{title,request}; prepare:{stage}; evidence-bundle:{stage,terms:[2-6项]}; complete-stage:{stage,summary,sections,observations?,plannedSlices?,sliceId?}; review；openspec-plan；status/block/archive/openspec。"),
+        ]).optional().describe("载荷对象；兼容模型误把完整 JSON 对象编码成字符串。init:{title,request}; prepare:{stage}; evidence-bundle:{stage,terms:[2-6项]}; complete-stage:{stage,summary,sections,observations?,ambiguityResolution?,plannedSlices?,sliceId?}; review；openspec-plan；status/block/archive/openspec。"),
     },
     async execute(args, context) {
         try {
@@ -252,6 +252,7 @@ const lifecycleTool = tool({
                 const metadata = lifecycleFinalizeMetadata(i);
                 return out(await submit({ ...id, stage, summary: i.summary, sections,
                     claims: observations.map((item) => claimFromObservation(stage, String(item?.heading ?? ""), item)),
+                    ambiguityResolution: i.ambiguityResolution,
                     finalize: true, ...metadata }));
             }
             if (args.action === "section") {
@@ -465,6 +466,10 @@ export const dddLifecycleTool = lifecycleTool;
 // session guards at module scope so a stage prepared in one step still
 // constrains repository and shell tools in the next step.
 const dddSessions = new Set();
+// The command hook is the only runtime boundary that sees the user's exact
+// slash-command argument before the model can reinterpret it. Bind that text
+// to the session and make init consume it as authoritative input.
+const pendingOriginalRequests = new Map();
 const evidenceCalls = new Map();
 const activeStages = new Map();
 const repositoryCalls = new Map();
@@ -511,9 +516,34 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
         async "command.execute.before"(input) {
             if (input.command === "ddd" || input.command === "ddd-code")
                 dddSessions.add(input.sessionID);
+            if (input.command === "ddd") {
+                const originalRequest = String(input.arguments ?? "").trim();
+                if (originalRequest)
+                    pendingOriginalRequests.set(input.sessionID, originalRequest);
+            }
         },
         async "tool.execute.before"(input, hookOutput) {
             const args = hookOutput.args;
+            const boundOriginalRequest = pendingOriginalRequests.get(input.sessionID);
+            if (args?.action === "init" && boundOriginalRequest) {
+                let initPayload = {};
+                if (typeof args.input === "string") {
+                    try {
+                        const parsed = JSON.parse(args.input);
+                        if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+                            initPayload = parsed;
+                    }
+                    catch {
+                        // Preserve the valid command request even when a weaker caller
+                        // encoded the remaining init payload incorrectly. The lifecycle
+                        // will still report any missing required field such as title.
+                    }
+                }
+                else if (args.input && typeof args.input === "object" && !Array.isArray(args.input)) {
+                    initPayload = args.input;
+                }
+                args.input = { ...initPayload, request: boundOriginalRequest };
+            }
             if (input.tool === "skill" && args?.name === "ddd-orchestrate")
                 dddSessions.add(input.sessionID);
             const stagePayload = String(args?.input?.stage ?? "");

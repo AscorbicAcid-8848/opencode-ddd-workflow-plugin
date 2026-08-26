@@ -8,6 +8,14 @@ import { candidateDocument, documentSections, publishSections, documentPath, wri
 import { newChange, writeLink, verifyArchive, runOpenSpec, openSpecAction, planningArtifacts } from "./openspec.js";
 import { WorkflowError } from "./types.js";
 import { claimContractFor, validateStageClaims } from "./claims.js";
+export function requiresScenarioClarification(request) {
+    const text = String(request ?? "").trim();
+    if (!text)
+        return true;
+    const hasScenarioStructure = /(?:当|如果|若|每次|一旦|成功|失败|返回|展示|查询|记录|允许|禁止|必须|不得|仅限|通过)[^。；\n]{1,80}/u.test(text)
+        || /(?:when|if|after|before|must|shall|return|record|query|display)\b/iu.test(text);
+    return !hasScenarioStructure && text.length < 48;
+}
 async function resolveRoot(id) {
     const profile = await profileFor(id.workflowType);
     const root = await workflowRoot(id.projectRoot, profile.artifactBase, profile.artifactSubdir, id.workflowId);
@@ -110,6 +118,15 @@ export async function prepare(input) {
             originalRequest: state.originalRequest ?? "",
             rule: "本阶段只能细化原始请求与已批准上游决策；新增可观察业务能力必须先回到相应人工里程碑批准，禁止从 workflow_id、代码命名或技术可能性推断需求。",
         },
+        ...(stage.scopeContract?.id === "system-discovery" && requiresScenarioClarification(state.originalRequest ?? "") ? {
+            ambiguityContract: {
+                requiresHumanChoice: true,
+                reason: "原始请求只给出能力名称，未明确触发条件、业务结果或异常语义。",
+                presentation: "至少给出两套候选业务解释；每套分别画候选事件流并说明取舍。明确写出：人工批准前，任何候选均不进入本次目标、唯一主流程或已确认规则。",
+                submitField: "complete-stage.input.ambiguityResolution={status:'unresolved',candidates:[{id,label},{id,label}],affectedDecisions:['触发条件',...]}；候选 id 与自然语言标题自由命名，不要求固定措辞。",
+                forbids: ["把代码中的现有入口自动解释为新能力触发点", "把候选查询、记录、时间或权限规则写成已批准需求"],
+            },
+        } : {}),
         unfilledSectionHeadings: milestoneMissing.filter((heading) => allowedSectionHeadings.includes(heading)),
         ...(stage.qualityContract ? { qualityContract: {
                 minTotalChars: stage.qualityContract.minSectionChars,
@@ -210,6 +227,7 @@ async function mergeStageDraft(root, input) {
         summary: input.summary || draft?.summary || "",
         sections: { ...(draft?.sections ?? {}), ...(input.sections ?? {}) },
         claims: mergeClaims(draft?.claims, input.claims),
+        ambiguityResolution: input.ambiguityResolution ?? draft?.ambiguityResolution,
         plannedSlices: input.plannedSlices ?? draft?.plannedSlices,
         sliceId: input.sliceId ?? draft?.sliceId,
     };
@@ -227,6 +245,7 @@ export async function submit(input) {
     if (partial) {
         await writeJson(stageDraftPath(root, stage.id), {
             summary: merged.summary, sections: merged.sections, claims: merged.claims,
+            ambiguityResolution: merged.ambiguityResolution,
             plannedSlices: merged.plannedSlices, sliceId: merged.sliceId,
         });
         const allowed = writableHeadingsForStage(stage);
@@ -265,6 +284,7 @@ export async function submit(input) {
         completedAt: now(),
         plannedSlices: merged.plannedSlices,
         sliceId: merged.sliceId,
+        ambiguityResolution: merged.ambiguityResolution,
     };
     state.checkpoints.push(checkpoint);
     if (state.status === "runtime_blocked") {
@@ -562,6 +582,17 @@ export function validateStageSemantics(state, stage, input) {
         });
         if (queryPseudoEvents.length)
             addFinding("STRATEGIC_EVENT_NOT_STATE_CHANGE", "战略事件风暴", queryPseudoEvents, "查询、返回、展示或读取完成属于读模型结果，不是领域主体状态变化，不能列为过去时领域事件");
+        if (requiresScenarioClarification(state.originalRequest ?? "")) {
+            const resolution = input.ambiguityResolution;
+            const candidates = Array.isArray(resolution?.candidates) ? resolution.candidates : [];
+            const ids = new Set(candidates.map((item) => String(item?.id ?? "").trim()).filter(Boolean));
+            const labelsComplete = candidates.every((item) => String(item?.label ?? "").trim());
+            const affected = Array.isArray(resolution?.affectedDecisions)
+                ? resolution.affectedDecisions.map((item) => String(item).trim()).filter(Boolean) : [];
+            if (resolution?.status !== "unresolved" || ids.size < 2 || !labelsComplete || affected.length === 0) {
+                addFinding("AMBIGUOUS_SCENARIO_PREMATURE_COMMITMENT", "战略事件风暴", ["status=unresolved", "至少两项有稳定 id/label 的候选", "affectedDecisions"], "原始请求只有能力名称，尚不足以唯一确定触发、结果与规则；请用 stageCard.ambiguityContract.submitField 结构化声明候选与受影响决策，再把候选事件流并列交给人选择");
+            }
+        }
     }
     if (stage.scopeContract?.id === "system-strategy") {
         const forbidden = ["聚合根", "值对象", "应用服务", "领域服务", "仓储接口", "DTO", "Mapper", "Controller", "SQL", "表结构", "类名", "方法名"];
@@ -684,6 +715,7 @@ export async function review(input) {
             ...input,
             summary: checkpoint.summary,
             sections: Object.fromEntries(Object.entries(allSections).filter(([heading]) => owned.has(heading))),
+            ambiguityResolution: checkpoint.ambiguityResolution,
         }).filter((finding) => finding.severity === "blocking");
         if (semanticBlockers.length)
             throw new WorkflowError(`正式里程碑文档未通过阶段语义复核，禁止人工批准：${semanticBlockers.map((finding) => finding.message).join("；")}`);

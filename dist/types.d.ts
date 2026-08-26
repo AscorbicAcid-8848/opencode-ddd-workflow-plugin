@@ -70,6 +70,7 @@ export interface Checkpoint {
     plannedSlices?: number;
     completedSlices?: number;
     sliceId?: string;
+    ambiguityResolution?: unknown;
 }
 export interface WorkflowState {
     schemaVersion: string;
