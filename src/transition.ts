@@ -32,6 +32,9 @@ function cycleChoices(profile: WorkflowProfile, latest: Checkpoint): string[] {
 function feedbackOwnerStage(profile: WorkflowProfile, latest: Checkpoint, beforeIndex: number): string | null {
   const feedback = latest.review?.feedback ?? ""
   const matchers: Array<[RegExp, RegExp]> = [
+    [/(?:模型一致性|稳定标识|模型标识|\bME-\d+\b|\bINV-\d+\b)/u, /(?:^|-)(?:model-review)$/],
+    [/(?:现状证据|行为基线|兼容性约束|证据缺口)/u, /(?:^|-)(?:current-evidence|baseline-evidence)$/],
+    [/(?:战略事件风暴|大图事件风暴|系统级事件流|一页结论|业务主题)/u, /(?:^|-)(?:big-picture-event-storm)$/],
     [/(?:数据库|表结构|持久化|仓储|聚合|值对象|应用服务|领域服务|模块|分层|依赖)/u, /(?:^|-)(?:tactical-design|pilot-tactical-design)$/],
     [/(?:命令|领域事件|策略|不变量|战术事件风暴|设计级事件风暴)/u, /(?:^|-)(?:design-level-event-storm|pilot-design-level-event-storm)$/],
     [/(?:子域|限界上下文|上下文映射|微服务边界|战略设计|服务用例)/u, /(?:^|-)(?:strategic-impact|target-strategy|subdomains|bounded-contexts|context-map|service-use-cases)$/],
@@ -117,6 +120,14 @@ export function workflowTransition(profile: WorkflowProfile, state: WorkflowStat
     message: "工作流已被人工拒绝；如需继续请创建新的明确请求。",
   })
 
+  if (state.status === "runtime_blocked") return common({
+    ...base, stageRole: "blocked", documentRole: "cumulative-working-document", humanReviewRequired: false,
+    mustContinue: false, stopAllowed: true, stopReason: "runtime-blocked", requiredAction: "stop",
+    nextStage: state.runtimeBlock?.stage ?? state.currentStage,
+    allowedNextStages: [state.runtimeBlock?.stage ?? state.currentStage].filter(Boolean),
+    message: `运行时证据不足，工作流已诚实阻塞在 ${state.runtimeBlock?.stage ?? state.currentStage}：${state.runtimeBlock?.reason ?? "未提供原因"}。外部条件修复后重新 prepare 同一阶段；不得伪造测试、E2E 或 Git 证据。`,
+  })
+
   if (state.status === "awaiting_archive") return common({
     ...base, stageRole: "archive", documentRole: "human-review-document", humanReviewRequired: false,
     mustContinue: true, stopAllowed: false, requiredAction: "archive",
@@ -128,8 +139,8 @@ export function workflowTransition(profile: WorkflowProfile, state: WorkflowStat
   const normalNext = normalNextContract?.id ?? null
   const progress = implementationProgress(state)
   let allowed = choices.length > 1 ? choices : normalNext ? [normalNext] : []
-  if (normalNextContract?.requiresCompletedImplementation && progress.known) {
-    if (progress.complete) allowed = [normalNextContract.id]
+  if (normalNextContract?.requiresCompletedImplementation) {
+    if (progress.known && progress.complete) allowed = [normalNextContract.id]
     else {
       const impl = nearestImplStage(profile, idx)
       allowed = impl ? [impl] : []
@@ -145,8 +156,8 @@ export function workflowTransition(profile: WorkflowProfile, state: WorkflowStat
     nextStage: next, allowedNextStages: allowed, nextHumanGate,
     message: select
       ? `当前循环可继续：${allowed.join("、")}；必须根据批准的完成条件选择一个合法阶段。`
-      : normalNextContract?.requiresCompletedImplementation && progress.known && !progress.complete
-        ? `实现尚未完成（${progress.completed}/${progress.planned} 个纵向切片）；只能继续执行阶段：${next}`
+      : normalNextContract?.requiresCompletedImplementation && (!progress.known || !progress.complete)
+        ? `实现尚未完成（${progress.known ? `${progress.completed}/${progress.planned}` : "交付计划未声明切片数量"}）；只能继续执行阶段：${next}`
         : milestoneReady && latest.status === "approved"
           ? `里程碑 ${milestone?.roman ?? "?"} 已批准；必须继续执行阶段：${next}`
           : `里程碑 ${milestone?.roman ?? "?"} 尚未形成，无需人工验收；必须继续执行阶段：${next}`,

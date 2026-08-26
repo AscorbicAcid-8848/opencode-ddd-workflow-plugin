@@ -1,7 +1,7 @@
 export type WorkflowType = "add-feature" | "refactor-system" | "create-system"
 export type ReviewDecision = "approve" | "revise" | "reject"
 export type OpenSpecArtifact = "proposal" | "specs" | "design" | "tasks" | "apply"
-export type LifecycleAction = "init" | "prepare" | "submit" | "review" | "status" | "archive" | "openspec"
+export type LifecycleAction = "init" | "prepare" | "evidence-bundle" | "complete-stage" | "section" | "finalize" | "submit" | "review" | "status" | "block" | "archive" | "openspec" | "openspec-plan"
 
 export interface StageContract {
   id: string
@@ -79,12 +79,14 @@ export interface WorkflowState {
   originalRequest?: string
   projectRoot: string
   artifactRoot: string
-  status: "active" | "revision_requested" | "rejected" | "awaiting_archive" | "complete"
+  status: "active" | "revision_requested" | "rejected" | "runtime_blocked" | "awaiting_archive" | "complete"
   currentStage: string
   createdAt: string
   updatedAt: string
   checkpoints: Checkpoint[]
   openSpec?: { changeId?: string; archivedAt?: string; status?: string }
+  runtimeBlock?: { stage: string; reason: string; evidence: string[]; remediation: string[]; blockedAt: string }
+  implementationBaseline?: { head: string; capturedAt: string }
   [key: string]: unknown
 }
 
@@ -115,6 +117,29 @@ export interface ValidationFinding {
   message: string
   severity: "blocking" | "warning"
   suggestion?: string
+}
+
+export type ClaimMaturity = "fact" | "hypothesis" | "candidate" | "proposed" | "implemented" | "verified"
+
+export interface StageClaim {
+  id: string
+  kind: string
+  statement: string
+  maturity: ClaimMaturity
+  documentSection: string
+  authorityRefs: string[]
+  evidenceRefs: string[]
+  attributes?: Record<string, unknown>
+}
+
+export interface StageClaimContract {
+  required: boolean
+  allowedKinds: string[]
+  allowedMaturities: ClaimMaturity[]
+  evidenceRequiredKinds: string[]
+  authorityPrefixes: string[]
+  evidencePrefixes: string[]
+  rules: string[]
 }
 
 export class WorkflowError extends Error {

@@ -27,7 +27,7 @@
         {
           "id": "01-current-evidence",
           "skills": [
-            "ddd-deliver-feature"
+            "ddd-evidence-recovery"
           ],
           "required": [],
           "checklist": [
@@ -192,7 +192,8 @@
               "命令—策略—事件—读模型追踪",
               "失败矩阵",
               "不变量候选",
-              "事务边界与并发热点",
+              "事务边界",
+              "并发热点",
               "持久化热点"
             ]
           },
@@ -319,7 +320,7 @@
         {
           "id": "09-implementation",
           "skills": [
-            "ddd-develop",
+            "ddd-implementation",
             "ddd-git-delivery",
             "ddd-openspec-bridge"
           ],
@@ -474,8 +475,7 @@
           "id": "01-refactoring-scope-convergence",
           "stepNumber": "01",
           "skills": [
-            "ddd-scope",
-            "ddd-refactor-system"
+            "ddd-scope"
           ],
           "required": [],
           "checklist": [
@@ -505,7 +505,7 @@
             "01"
           ],
           "skills": [
-            "ddd-refactor-system"
+            "ddd-evidence-recovery"
           ],
           "required": [],
           "checklist": [
@@ -737,7 +737,7 @@
             "08"
           ],
           "skills": [
-            "ddd-develop",
+            "ddd-implementation",
             "ddd-git-delivery",
             "ddd-openspec-bridge"
           ],
@@ -1132,7 +1132,7 @@
         {
           "id": "11-implementation",
           "skills": [
-            "ddd-develop",
+            "ddd-implementation",
             "ddd-git-delivery",
             "ddd-openspec-bridge"
           ],

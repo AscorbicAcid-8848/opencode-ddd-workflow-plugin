@@ -1,110 +1,85 @@
 ---
 name: ddd-orchestrate
-description: "Route a DDD request to one of three human-gated workflows and drive it through six milestones with the ddd_lifecycle tool. Use when the user wants DDD-based feature delivery, system refactoring, or new-system creation."
+description: "Route one DDD request into feature delivery, legacy refactoring, or greenfield creation and drive its six human-gated milestones with ddd_lifecycle."
 ---
 
-# DDD Orchestrator (v2 — LLM-friendly)
+# DDD Orchestrator v2
 
-You drive DDD workflows with **one tool**: `ddd_lifecycle`. It is a deterministic state machine. Always follow the `transition` it returns; never guess state from files.
+Use only `ddd_lifecycle` for workflow state. Follow its `transition`; never infer state from files. Do not narrate between calls.
 
-## Step 1 — Route
+## Route and initialize
 
-Pick exactly one workflow type:
+Choose exactly one:
 
-- `add-feature` — existing system, deliver **one** new user-visible capability, keep most boundaries.
-- `refactor-system` — existing system, recover the domain model / migrate boundaries / split services.
-- `create-system` — greenfield, design from system-level scenarios before any code.
+- `add-feature`: one new user-visible capability in an existing system; preserve approved topology.
+- `refactor-system`: recover or migrate domain boundaries in an existing system.
+- `create-system`: greenfield design from system-level scenarios.
 
-If genuinely ambiguous, ask **one** question:
-> 你的主要目标是先上线这个单一功能，还是借此迁移整个项目的领域边界？
-
-## Step 2 — Init
-
-Call `ddd_lifecycle` once:
+If truly ambiguous, ask one scope question. Otherwise initialize once:
 
 ```json
-{
-  "action": "init",
-  "workflow_type": "<add-feature|refactor-system|create-system>",
-  "workflow_id": "<kebab-case-id>",
-  "input": { "title": "<短标题>", "request": "<用户的业务目标、规则、排除项、质量约束，原文复制，去掉工具名/JSON/里程碑导航>" }
-}
+{"action":"init","workflow_type":"add-feature|refactor-system|create-system","workflow_id":"kebab-case-id","input":{"title":"短标题","request":"原始业务目标、规则、排除项和质量约束"}}
 ```
 
-`init` creates the OpenSpec change at `openspec/changes/<workflow-id>/ddd/` and auto-completes the `00-request` stage. The returned `transition.nextStage` tells you the first real stage.
+Never initialize a continuation. With one active change, call `prepare` directly and let the plugin resolve its identity. Use `status` only after an ambiguity/error says several changes are possible or when the user explicitly asks for status.
 
-**Never call `init` twice.** If the user says continue/resume/approve, or you already have a workflow id, skip init and use `status` then the action the transition requests.
+## Advance one stage
 
-## Step 3 — Advance (repeat until a human gate)
+Repeat only while `requiredAction` is `continue` or `select-next-stage`:
 
-While `transition.requiredAction` is `continue` or `select-next-stage`:
+1. Prepare exactly the returned/selected stage:
 
-1. **Prepare** the next stage:
-   ```json
-   { "action": "prepare", "input": { "stage": "<transition.nextStage or your selected stage>" } }
-   ```
-   Read the returned `stageCard`. It tells you: stage id/title, milestone, checklist, skills to load, quality contract, and the exact `submitFormat`.
-
-2. **Do the work** described by the checklist. Load only the skills listed in `stageCard.skills`. For evidence stages, obey `stageCard.evidenceBudget`: combine related terms into one targeted search, then read only relevant files or line windows; never dump an entire large SQL/log/history file, spawn subagents, or create exploration todos. The host hard-stops repository call 9; never retry a denied call. Missing proof becomes an explicit evidence gap instead of wider exploration. Design freely for design stages.
-
-3. **Submit** with the format from `stageCard.submitFormat`:
-   ```json
-   {
-     "action": "submit",
-     "input": {
-       "stage": "<stageCard.stageId>",
-       "summary": "<一句话阶段结论，>=20 字>",
-       "sections": { "<里程碑文档章节标题>": "<该章节 Markdown 正文>" }
-     }
-   }
-   ```
-   - `sections` keys must come from `stageCard.allowedSectionHeadings` and match the milestone template's `## ` headings exactly (e.g. `一页结论`, `业务主题与分析范围`). Put `###` subsections inside the value; never repeat a `##` heading in the value.
-   - If `findings` contains **blocking** items, fix and submit again. **warning** items are advisory.
-   - The runtime writes your `sections` into the milestone document and records a checkpoint.
-   - For implementation stages, also pass `sliceId`. For delivery-plan stages, pass `plannedSlices`.
-
-4. Look at the new `transition`. Repeat until `requiredAction === "await-human-review"`.
-
-## Step 4 — Human gate
-
-When `transition.requiredAction === "await-human-review"`:
-- Output the `transition.message` verbatim (it contains the review checklist).
-- **Stop** and wait for the human to say 批准/修改/拒绝.
-- Record the decision:
-  ```json
-  { "action": "review", "input": { "stage": "<transition.nextHumanGate>", "decision": "<approve|revise|reject>", "reviewer": "<name>", "feedback": "<optional>" } }
-  ```
-
-- `approve` → continue to the next milestone.
-- `revise` → `transition.allowedNextStages` lists the stages that own the feedback; `prepare` one of them, fix, `submit` again.
-- `reject` → workflow stops.
-
-## Step 5 — Archive
-
-After the final milestone (VI) is approved, `transition.requiredAction === "archive"`. Call:
 ```json
-{ "action": "archive" }
+{"action":"prepare","input":{"stage":"<nextStage>"}}
 ```
-It runs OpenSpec strict validation and archives the change. On success the workflow is `complete`.
 
-## OpenSpec artifacts
+2. Respect `stageCard.stageBoundary`, answer its checklist, use only its listed professional skills, and write only `allowedSectionHeadings`. Keep all section text between `qualityContract.minTotalChars` and `targetMaxTotalChars`. The immutable scope is `intentContract.originalRequest`. Do not make decisions owned by later stages.
 
-At delivery-plan stages (`openspecArtifactGate`) and for explicit queries, use:
+3. For `01-current-evidence` only, derive 2–6 stable business/code terms and call once:
+
 ```json
-{ "action": "openspec", "input": { "artifact": "<proposal|specs|design|tasks|apply>" } }
+{"action":"evidence-bundle","input":{"stage":"01-current-evidence","terms":["Shop","UserHolder","view","trail"]}}
 ```
-- `apply` validates the change strictly before implementation.
-- Others report whether the artifact file is present.
 
-## Scope discipline
+Use no repository/shell exploration in this stage. Copy `excerpt.ref` exactly into `evidence_refs`; cover `requiredCoverage`; packet-external knowledge is an `evidence-gap` or `open-question`, never a proposed table/model/API. Stay within `responseBudget`.
 
-Keep decisions in order: scenarios → Big Picture EventStorming → strategic design → Design-Level EventStorming → tactical design → delivery plan → implementation → final acceptance. Big Picture never decides APIs/aggregates; tactical design owns aggregates/services/persistence. The `stageCard.checklist` is your scope guard — answer every item.
+4. Submit every allowed section in one valid JSON call. Values may use `###` subsections; the runtime also normalizes accidental nested `##` headings.
 
-## Rules
+```json
+{"action":"complete-stage","input":{"stage":"<stageId>","summary":"至少20字的阶段结论","sections":{"<allowed heading>":"完整正文"},"observations":[{"heading":"<heading>","kind":"<allowed kind>","statement":"正文中的原句","evidence_refs":["code:relative/path#L1-L3"]}]}}
+```
 
-- Use **only** `ddd_lifecycle` to change workflow state. Never hand-edit `workflow-state.json` or milestone documents.
-- Every tool call is valid machine JSON with ASCII `"` delimiters.
-- `workflow_type` + `workflow_id` are required on `init`; later calls may omit them when the project has exactly one active change.
-- Roman numerals (I–VI) are human labels; pass the exact internal stage id (e.g. `02-big-picture-event-storm`) returned by `status`/`transition`.
-- If you only have a Roman label from the user, call `status` first with `view="compact"`, then use the returned `nextHumanGate` as the `review.stage`.
-- Keep one stage transaction compact. Do not announce or attempt parallel exploration; the lifecycle already supplies the complete stage contract.
+`observations` is required only when the stage card requests current-system claims. Its `heading` is an exact key from `allowedSectionHeadings`, never a nested `###` subtitle. Facts need cited evidence; unknowns do not invent evidence. For implementation include `sliceId`; for delivery-plan include `plannedSlices`. Retry the complete payload only for blocking findings.
+
+Before completing the delivery-plan stage, call `openspec-plan` once:
+
+```json
+{"action":"openspec-plan","input":{"proposal":"...","specs":[{"capability":"kebab-case","content":"delta spec with scenarios"}],"design":"...","tasks":"- [ ] 1.1 vertical slice"}}
+```
+
+Only behavior-preserving refactoring may use `skipSpecs:true`.
+
+## Human gate and completion
+
+When `requiredAction` is `await-human-review`, output `transition.message` verbatim and stop. On the next user turn record the decision:
+
+```json
+{"action":"review","input":{"decision":"approve|revise|reject","reviewer":"<name>","feedback":"<optional>"}}
+```
+
+The plugin binds review to the current unique human gate; do not guess an internal stage ID and do not call status first. Follow the returned transition. After milestone VI approval, call `{"action":"archive"}`; success requires strict OpenSpec validation.
+
+If real build, test, E2E, database, cache, Git, or runtime evidence is unavailable, do not fake or install around it:
+
+```json
+{"action":"block","input":{"stage":"09-implementation","reason":"真实阻塞原因（至少20字）","evidence":["失败证据"],"remediation":["恢复条件"]}}
+```
+
+## Invariants
+
+- Order is scenarios → Big Picture EventStorming → strategic design → implementation-unit use cases → Design-Level EventStorming → tactical design → delivery plan → implementation → acceptance.
+- Big Picture does not decide API, aggregate, table, or middleware. Tactical design owns application services, aggregates, domain interactions, and persistence.
+- Roman I–VI are human labels; tool calls use exact stage IDs.
+- One stage transaction is one `prepare`, optional required packet/planning call, then one `complete-stage`.
+- Never hand-edit formal milestone/OpenSpec artifacts or workflow state.
+- During implementation do not spawn subagents or download build infrastructure; honor runtime repository and command budgets.

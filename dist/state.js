@@ -8,7 +8,38 @@ export async function loadState(root) {
     const canonical = statePath(root);
     if (!await exists(canonical))
         throw new WorkflowError(`Missing workflow state: ${canonical}`);
-    return readJson(canonical);
+    const state = await readJson(canonical);
+    let migrated = false;
+    for (const checkpoint of state.checkpoints) {
+        const decision = String(checkpoint.review?.decision ?? "").toLowerCase();
+        if (decision === "approved") {
+            ;
+            checkpoint.review.decision = "approve";
+            if (checkpoint.status === "rejected")
+                checkpoint.status = "approved";
+            migrated = true;
+        }
+        else if (decision === "rejected") {
+            ;
+            checkpoint.review.decision = "reject";
+            migrated = true;
+        }
+        else if (decision === "revision" || decision === "revision_requested") {
+            ;
+            checkpoint.review.decision = "revise";
+            if (checkpoint.status === "rejected")
+                checkpoint.status = "revision_requested";
+            migrated = true;
+        }
+    }
+    const latest = state.checkpoints.at(-1);
+    if (state.status === "rejected" && latest?.status === "approved") {
+        state.status = "active";
+        migrated = true;
+    }
+    if (migrated)
+        await writeJson(canonical, state);
+    return state;
 }
 export async function saveState(root, state) {
     state.updatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "+00:00");

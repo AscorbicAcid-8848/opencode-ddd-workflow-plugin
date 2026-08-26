@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { mkdir } from "node:fs/promises";
+import { readFile, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { exists, run, writeJson, atomicText } from "./fs.js";
 import { activeChange } from "./state.js";
@@ -76,7 +76,7 @@ export async function newChange(projectRoot, id, title, request) {
     await mkdir(change, { recursive: true });
     const yaml = path.join(change, ".openspec.yaml");
     if (!await exists(yaml)) {
-        await atomicText(yaml, `id: ${id}\ntitle: ${title}\nstatus: in-progress\n`);
+        await atomicText(yaml, `schema: spec-driven\ncreated: ${new Date().toISOString().slice(0, 10)}\n`);
     }
     const readme = path.join(change, "README.md");
     if (!await exists(readme)) {
@@ -84,34 +84,105 @@ export async function newChange(projectRoot, id, title, request) {
     }
     return change;
 }
-export async function writeLink(root, state, status, changeId, archivedAt) {
+export async function writeLink(root, state, status, changeId, archiveTarget) {
     const link = {
         schema: "ddd-openspec-link/v2", changeId, workflowId: state.workflowId,
-        status, archivedAt, updatedAt: new Date().toISOString(),
+        status, archivedAt: state.openSpec?.archivedAt, archiveTarget, updatedAt: new Date().toISOString(),
     };
     await writeJson(path.join(root, ".ddd", "openspec-link.json"), link);
 }
 export async function verifyArchive(projectRoot, id) {
     try {
-        const list = await runOpenSpecJson(projectRoot, ["list", "changes", "--json"]);
-        const active = Array.isArray(list) ? list : list?.changes ?? [];
-        if (!active.some((c) => c.id === id)) {
-            const archive = path.join(projectRoot, "openspec", "changes", "archive");
-            const candidate = (await import("node:fs/promises").then(({ readdir }) => readdir(archive, { withFileTypes: true }).catch(() => [])))
-                .filter((d) => d.isDirectory() && d.name.endsWith(`-${id}`));
-            if (candidate.length)
-                return { archived: true, target: path.join(archive, candidate[0].name) };
+        const change = activeChange(projectRoot, id);
+        const archive = path.join(projectRoot, "openspec", "changes", "archive");
+        const archived = (await readdir(archive, { withFileTypes: true }).catch(() => []))
+            .filter((entry) => entry.isDirectory() && entry.name.endsWith(`-${id}`));
+        if (!await exists(change) && archived.length) {
+            return { archived: true, target: path.join(archive, archived[0].name) };
         }
-        const out = await runOpenSpec(projectRoot, ["archive", id, "--strict"]);
-        return { archived: true, target: path.join(projectRoot, "openspec", "changes", "archive", `${new Date().toISOString().slice(0, 10)}-${id}`), error: out };
+        if (!await exists(change))
+            return { archived: false, error: `OpenSpec active change not found: ${id}` };
+        await runOpenSpec(projectRoot, ["validate", id, "--strict"]);
+        const out = await runOpenSpec(projectRoot, ["archive", id, "--yes", "--json"]);
+        const after = (await readdir(archive, { withFileTypes: true }).catch(() => []))
+            .filter((entry) => entry.isDirectory() && entry.name.endsWith(`-${id}`));
+        if (!after.length || await exists(change)) {
+            return { archived: false, error: `OpenSpec archive command returned without moving change: ${out}` };
+        }
+        return { archived: true, target: path.join(archive, after[0].name), error: out };
     }
     catch (error) {
         return { archived: false, error: error.message };
     }
 }
+async function ensureChangeMetadata(projectRoot, id, skipSpecs) {
+    const file = path.join(activeChange(projectRoot, id), ".openspec.yaml");
+    let created = new Date().toISOString().slice(0, 10);
+    if (await exists(file)) {
+        const current = await readFile(file, "utf8");
+        created = current.match(/^created:\s*(\d{4}-\d{2}-\d{2})\s*$/mu)?.[1] ?? created;
+    }
+    await atomicText(file, `schema: spec-driven\ncreated: ${created}\n${skipSpecs ? "skip_specs: true\n" : ""}`);
+}
+async function specFiles(change) {
+    const root = path.join(change, "specs");
+    if (!await exists(root))
+        return [];
+    const entries = await readdir(root, { recursive: true, withFileTypes: true });
+    return entries.filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+        .map((entry) => path.join(entry.parentPath, entry.name));
+}
+export async function planningArtifacts(projectRoot, id) {
+    const change = activeChange(projectRoot, id);
+    const files = ["proposal.md", "design.md", "tasks.md"];
+    const missing = [];
+    for (const file of files)
+        if (!await exists(path.join(change, file)))
+            missing.push(file);
+    const metadata = await readFile(path.join(change, ".openspec.yaml"), "utf8").catch(() => "");
+    const skipSpecs = /^skip_specs:\s*true\s*$/mu.test(metadata);
+    const deltas = await specFiles(change);
+    if (!skipSpecs && deltas.length === 0)
+        missing.push("specs/<capability>/spec.md");
+    return { complete: missing.length === 0, missing, files: [...files.filter((file) => !missing.includes(file)), ...deltas] };
+}
 export async function openSpecAction(input) {
-    const { projectRoot, artifact, state } = input;
+    const { projectRoot, artifact, state, content, capability, skipSpecs } = input;
     const id = state.workflowId;
+    const change = activeChange(projectRoot, id);
+    await ensureChangeMetadata(projectRoot, id, skipSpecs);
+    if (content !== undefined || skipSpecs !== undefined) {
+        if (artifact === "apply")
+            throw new WorkflowError("apply 只用于严格校验，不能写入内容。");
+        if (skipSpecs) {
+            if (artifact !== "specs" || state.workflowType !== "refactor-system") {
+                throw new WorkflowError("skipSpecs 只允许无行为变化的 refactor-system 在 specs 工件上使用。");
+            }
+            return { status: "written", detail: path.join(change, ".openspec.yaml") };
+        }
+        if (!content?.trim())
+            throw new WorkflowError(`${artifact} 工件内容不能为空。`);
+        let file;
+        if (artifact === "specs") {
+            if (!capability || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(capability)) {
+                throw new WorkflowError("specs 工件必须提供 kebab-case capability。");
+            }
+            if (!/^##\s+(?:ADDED|MODIFIED|REMOVED|RENAMED) Requirements\s*$/mu.test(content)
+                || !/^####\s+Scenario:\s+\S+/mu.test(content)) {
+                throw new WorkflowError("spec delta 必须包含合法的 Requirements delta 标题和至少一个 #### Scenario。");
+            }
+            file = path.join(change, "specs", capability, "spec.md");
+            await mkdir(path.dirname(file), { recursive: true });
+        }
+        else {
+            file = path.join(change, `${artifact}.md`);
+        }
+        if (artifact === "tasks" && !/^- \[[ xX]\]\s+\d+\.\d+\s+/mu.test(content)) {
+            throw new WorkflowError("tasks.md 必须包含 OpenSpec 可追踪的 '- [ ] X.Y ...' 任务。");
+        }
+        await atomicText(file, `${content.trim()}\n`);
+        return { status: "written", detail: file };
+    }
     if (artifact === "apply") {
         try {
             const out = await runOpenSpec(projectRoot, ["validate", id, "--strict"]);
@@ -122,10 +193,12 @@ export async function openSpecAction(input) {
         }
     }
     if (artifact === "proposal" || artifact === "specs" || artifact === "design" || artifact === "tasks") {
-        const change = activeChange(projectRoot, id);
+        if (artifact === "specs") {
+            const files = await specFiles(change);
+            return { status: files.length ? "present" : "missing", detail: files.join("\n") || path.join(change, "specs", "<capability>", "spec.md") };
+        }
         const file = path.join(change, `${artifact}.md`);
-        const has = await exists(file);
-        return { status: has ? "present" : "missing", detail: file };
+        return { status: await exists(file) ? "present" : "missing", detail: file };
     }
     if (artifact === "apply")
         return { status: "noop", detail: "apply handled above" };

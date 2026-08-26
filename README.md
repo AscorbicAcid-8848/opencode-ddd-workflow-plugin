@@ -14,12 +14,14 @@ semantic-graph contracts, aggressive hard-stop protection, context budgets, and 
 typed submission envelope. v2 keeps the parts that matter and drops the parts that trip
 models up:
 
-- **One tool**: `ddd_lifecycle` with `action=init|prepare|submit|review|status|archive|openspec`.
-- **Simple submit**: `{ stage, summary, sections }` — Markdown section content, no
+- **One tool**: `ddd_lifecycle` with a compact lifecycle action set.
+- **One-call stage submit**: `complete-stage` accepts `{ stage, summary, sections }` — Markdown section content, no
   items/relations/deferredItems graph.
-- **Light validation**: section presence, summary length, keyword suggestions (warnings),
-  no semantic relation graph.
-- **No hard-stop**: soft protection only; the model is trusted to use `ddd_lifecycle`.
+- **One-call OpenSpec plan**: `openspec-plan` writes proposal, delta specs, design and tasks without four extra model turns.
+- **Focused hard gates**: legal stage order, complete human documents, intent preservation,
+  intrinsic stage scope, real implementation Commit and honest runtime blocking.
+- **Bounded execution**: evidence and implementation stages reject subagent fan-out,
+  repeated exploration, command churn and temporary tool downloads.
 - **Small runtime**: ~1.5k lines of TypeScript vs ~450 KB.
 
 ## Install
@@ -49,7 +51,7 @@ Copy `skills/ddd-orchestrate/SKILL.md` into your skills directory, or load it vi
 ```
 
 The model routes the request, calls `ddd_lifecycle(init)`, then loops
-`prepare → work → submit` until a human gate, where it presents the review checklist and
+`prepare → bounded work → complete-stage` until a human gate, where it presents the review checklist and
 waits for 批准/修改/拒绝.
 
 ### Example tool calls
@@ -65,11 +67,13 @@ Prepare next stage:
 { "action": "prepare", "input": {} }
 ```
 
-Submit:
+Complete one stage atomically:
 ```json
-{ "action": "submit", "input": { "stage": "01-current-evidence",
+{ "action": "complete-stage", "input": { "stage": "01-current-evidence",
   "summary": "现状证据已盘点并形成可执行验收约束基线。",
-  "sections": { "一页结论": "...", "业务主题与分析范围": "..." } } }
+  "sections": { "输入场景与现状事实": "...", "证据与追踪": "..." },
+  "observations": [{ "heading": "输入场景与现状事实", "kind": "current-behavior-fact",
+    "statement": "...", "evidence_refs": ["test:..."] }] } }
 ```
 
 Review:
@@ -82,7 +86,7 @@ Review:
 
 ```
 src/
-  index.ts      Plugin entry: ddd_lifecycle tool + soft protection hook
+  index.ts      Native SDK tools, commands, agents, and guards
   engine.ts     init/prepare/submit/review/status/archive/openspec
   transition.ts state-machine transition logic (linear + human gates + repeatable + backtrack)
   catalog.ts    loads workflow-profiles.json
