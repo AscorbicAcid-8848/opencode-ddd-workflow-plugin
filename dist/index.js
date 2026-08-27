@@ -737,6 +737,10 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
         },
         async "tool.execute.before"(input, hookOutput) {
             const args = hookOutput.args;
+            // Mobile Coder may expose built-in tool ids with title casing (Read,
+            // Glob, Edit). Normalize at the adapter boundary so policy cannot be
+            // bypassed by host-specific capitalization.
+            const toolName = String(input.tool ?? "").toLowerCase();
             const boundOriginalRequest = pendingOriginalRequests.get(input.sessionID);
             if (args?.action === "init" && boundOriginalRequest) {
                 let initPayload = {};
@@ -757,11 +761,11 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
                 }
                 args.input = { ...initPayload, request: boundOriginalRequest };
             }
-            if (input.tool === "skill" && args?.name === "ddd-orchestrate")
+            if (toolName === "skill" && args?.name === "ddd-orchestrate")
                 dddSessions.add(input.sessionID);
             const payload = lifecyclePayload(args);
             const stagePayload = String(payload.stage ?? "");
-            const isDddLifecyclePayload = typeof args?.action === "string" && lifecycleActions.has(args.action) && (input.tool === lifecycleToolId ||
+            const isDddLifecyclePayload = typeof args?.action === "string" && lifecycleActions.has(args.action) && (toolName === lifecycleToolId ||
                 args.action === "init" ||
                 /^(?:0[0-9]|1[0-2])-[a-z0-9-]+$/u.test(stagePayload) ||
                 dddSessions.has(input.sessionID));
@@ -789,16 +793,16 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
             if (sessionIsDdd)
                 dddSessions.add(input.sessionID);
             if (activeStage && implementationStages.has(activeStage)) {
-                if (["subagent", "workflow_run", "todowrite"].includes(input.tool)) {
+                if (["subagent", "workflow_run", "todowrite"].includes(toolName)) {
                     throw new Error("DDD_IMPLEMENTATION_TOOL_DENIED: 一个纵向切片必须在当前短事务内实现，禁止子代理、工作流扇出和探索 Todo。使用批准的文件映射；证据环境不可用时调用 action=block。");
                 }
-                if (evidenceTools.has(input.tool)) {
+                if (evidenceTools.has(toolName)) {
                     const used = repositoryCalls.get(input.sessionID) ?? 0;
                     if (used >= 16)
                         throw new Error("DDD_IMPLEMENTATION_REPOSITORY_BUDGET_EXHAUSTED: 当前切片 16 次定向仓库读取预算已用完。禁止继续探索；依据批准的文件映射实施，或用 action=block 如实报告证据缺口。");
                     repositoryCalls.set(input.sessionID, used + 1);
                 }
-                if (["bash", "shell"].includes(input.tool)) {
+                if (["bash", "shell"].includes(toolName)) {
                     const command = String(args?.command ?? "");
                     if (/(?:Invoke-WebRequest|curl\s|wget\s|winget\s|choco\s|scoop\s|npm\s+install|下载|apache-maven)/iu.test(command)) {
                         throw new Error("DDD_IMPLEMENTATION_BOOTSTRAP_DENIED: Coding 阶段禁止临时下载或安装构建基础设施。缺失 Maven、数据库、缓存或外部服务时调用 action=block，记录真实证据与修复条件。");
@@ -810,10 +814,10 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
                 }
             }
             if (evidenceCalls.has(input.sessionID)) {
-                if (["subagent", "workflow_run", "todowrite"].includes(input.tool)) {
+                if (["subagent", "workflow_run", "todowrite"].includes(toolName)) {
                     throw new Error("DDD_EVIDENCE_TOOL_DENIED: 现状证据阶段禁止子代理、工作流扇出和探索 Todo；请在当前短事务内完成定向取证。");
                 }
-                if (evidenceTools.has(input.tool) || ["bash", "shell"].includes(input.tool)) {
+                if (evidenceTools.has(toolName) || ["bash", "shell"].includes(toolName)) {
                     throw new Error("DDD_EVIDENCE_BUNDLE_REQUIRED: 现状阶段禁止逐文件或 Shell 探索。请调用一次 ddd_lifecycle(action=evidence-bundle, input={stage:'01-current-evidence',terms:[...]})，然后直接 complete-stage；包外未知项记录为 evidence gap。");
                 }
             }
@@ -822,7 +826,7 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
             // planning artifacts through ddd_lifecycle so validation happens before
             // the atomic write. This also prevents a weaker scheduler from bypassing
             // the milestone-V artifact gate with a generic file tool.
-            if (input.tool === "edit" || input.tool === "write" || input.tool === "apply_patch" || input.tool === "patch" || input.tool === "multiedit") {
+            if (["edit", "write", "apply_patch", "patch", "multiedit", "multi_edit"].includes(toolName)) {
                 const target = String(args?.filePath ?? args?.path ?? "").replace(/\\/gu, "/");
                 const formalArtifact = /(?:^|\/)openspec\/changes\/[^/]+\/(?:ddd\/(?:I|II|III|IV|V|VI)-[a-z-]+\.md|proposal\.md|design\.md|tasks\.md|specs\/[^/]+\/spec\.md)$/iu;
                 if (sessionIsDdd && target && formalArtifact.test(target)) {
@@ -830,7 +834,7 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
                 }
             }
             if (sessionIsDdd && (!activeStage || !implementationStages.has(activeStage))
-                && !isDddLifecyclePayload && input.tool !== "skill") {
+                && !isDddLifecyclePayload && toolName !== "skill") {
                 throw new Error("DDD_LIFECYCLE_ONLY: 当前建模/审批阶段只允许 professional skill 与 ddd_lifecycle。无需检查 Skill 目录、扫描 OpenSpec 或查找 CLI；review 会自动绑定当前人工门，prepare 会返回全部阶段上下文。");
             }
         },

@@ -161,7 +161,13 @@ export async function prepare(input) {
         } : {}),
         allowedSectionHeadings,
     };
-    return { ...transition, stageCard };
+    // A successful prepare is a Harness-owned stage selection transaction.
+    // Persist it so complete-stage and resumed host sessions never have to
+    // reconstruct the active stage from model memory.
+    state.currentStage = stage.id;
+    state.preparedStage = { stage: stage.id, preparedAt: now() };
+    await saveState(root, state);
+    return { ...workflowTransition(profile, state), stageCard };
 }
 function stageBoundary(scopeId) {
     const contracts = {
@@ -367,6 +373,7 @@ export async function submit(input) {
     if (state.status === "revision_requested")
         state.status = "active";
     state.currentStage = stage.id;
+    delete state.preparedStage;
     if (stage.humanGate && isLastWriter) {
         // milestone ready, awaiting review; status stays active but transition reflects gate
     }
@@ -1007,6 +1014,7 @@ export async function review(input) {
         "业务验收记录": `- 验收决定：${input.decision}\n- 验收人：${input.reviewer}\n- 验收时间：${record.reviewedAt}\n- 反馈：${record.feedback || "无"}`,
     });
     state.checkpoints[idx] = checkpoint;
+    delete state.preparedStage;
     await saveState(root, state);
     const transition = workflowTransition(profile, state);
     return { ...transition, reviewRecord: record };
@@ -1037,6 +1045,7 @@ export async function block(input) {
     };
     state.status = "runtime_blocked";
     state.currentStage = input.stage;
+    delete state.preparedStage;
     state.runtimeBlock = record;
     await saveState(root, state);
     return { ...workflowTransition(profile, state), runtimeBlock: record };
@@ -1049,6 +1058,7 @@ export async function archive(input) {
     const result = await verifyArchive(state.projectRoot, input.workflowId);
     if (result.archived) {
         state.status = "complete";
+        delete state.preparedStage;
         state.openSpec = { ...state.openSpec, status: "archived", archivedAt: now() };
         const archivedRoot = result.target ? path.join(result.target, profile.artifactSubdir ?? "") : root;
         state.artifactRoot = archivedRoot;

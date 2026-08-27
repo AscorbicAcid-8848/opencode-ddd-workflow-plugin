@@ -96,6 +96,18 @@ test("structured delivery plan repair preserves untouched slice fields", () => {
   assert.deepEqual(repaired.capabilities, current.capabilities)
 })
 
+test("structured delivery plan normalizes object decisions without object-string leakage", () => {
+  const plan = normalizeStructuredPlan({
+    ...validStructuredPlan,
+    designDecisions: [{ id: "DD-1", decision: "沿用批准聚合", rationale: "里程碑 IV 已批准" }],
+  })
+  assert.deepEqual(plan.designDecisions, ["DD-1；沿用批准聚合；理由：里程碑 IV 已批准"])
+  const milestone = compileDeliveryMilestoneSections(plan, "daily-visit-trail", {})
+  assert.doesNotMatch(milestone.sections["交付范围"], /\[object Object\]/u)
+  assert.match(milestone.sections["交付追踪矩阵"], /纵向切片—验收—文件映射/u)
+  assert.match(milestone.sections["证据与追踪"], /model-contract\.json/u)
+})
+
 test("state migration repairs legacy approved decisions that were misclassified as rejected", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "ddd-state-migration-"))
   try {
@@ -189,6 +201,9 @@ test("openspec-plan compiles a structured plan and binds the approved slice grap
     state.currentStage = "07-model-review"
     await writeFile(stateFile, JSON.stringify(state), "utf8")
 
+    const prepared = JSON.parse(await dddLifecycleTool.execute({ action: "prepare", input: {} }, context))
+    assert.equal(prepared.stageCard.stageId, "08-roadmap")
+    assert.equal((await loadState(root)).preparedStage.stage, "08-roadmap")
     const result = JSON.parse(await dddLifecycleTool.execute({ action: "openspec-plan", plan: validStructuredPlan }, context))
     assert.equal(result.status, "ready")
     assert.equal(result.plannedSlices, 1)
@@ -212,6 +227,7 @@ test("openspec-plan compiles a structured plan and binds the approved slice grap
     const milestone = JSON.parse(await dddLifecycleTool.execute({ action: "complete-stage", input: {} }, context))
     assert.equal(milestone.humanReviewRequired, true, JSON.stringify(milestone, null, 2))
     assert.equal(milestone.milestoneRoman, "V")
+    assert.equal((await loadState(root)).preparedStage, undefined)
     const milestoneText = await readFile(path.join(root, "V-delivery-plan.md"), "utf8")
     assert.match(milestoneText, /运行时从已校验的结构化计划和批准模型合同确定性编译/u)
     await runOpenSpec(dir, ["validate", "structured-plan", "--strict"])
@@ -412,6 +428,12 @@ test("prepare returns a stage card for the next stage", async () => {
     assert.ok(!p.stageCard.allowedSectionHeadings.includes("事实、假设与待确认项"))
     assert.equal(p.stageCard.claimContract.required, true)
     assert.ok(p.stageCard.claimContract.allowedKinds.includes("current-behavior-fact"))
+    const persisted = await loadState(path.join(dir, "openspec", "changes", "p1", "ddd"))
+    assert.equal(persisted.currentStage, "01-current-evidence")
+    assert.equal(persisted.preparedStage.stage, "01-current-evidence")
+    const transition = await status({ workflowType: "add-feature", workflowId: "p1", projectRoot: dir })
+    assert.equal(transition.nextStage, "01-current-evidence")
+    assert.deepEqual(transition.allowedNextStages, ["01-current-evidence"])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -1629,6 +1651,11 @@ test("plugin rejects generic writes to formal milestone and OpenSpec planning ar
       /DDD_FORMAL_ARTIFACT_WRITE_DENIED/,
     )
   }
+  await assert.rejects(
+    plugin["tool.execute.before"]({ tool: "Edit", sessionID, callID: "mobile-title-case" },
+      { args: { filePath: "openspec/changes/c1/ddd/IV-tactical-design.md" } }),
+    /DDD_FORMAL_ARTIFACT_WRITE_DENIED/,
+  )
   await assert.rejects(
     plugin["tool.execute.before"]({ tool: "write", sessionID, callID: "source" }, { args: { filePath: "src/main/App.java" } }),
     /DDD_LIFECYCLE_ONLY/,

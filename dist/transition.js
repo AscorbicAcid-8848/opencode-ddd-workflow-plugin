@@ -147,6 +147,12 @@ export function workflowTransition(profile, state) {
             allowed = impl ? [impl] : [];
         }
     }
+    // prepare commits one legal choice into durable workflow state. Once set,
+    // that stage is the only legal continuation until it is submitted, blocked,
+    // or explicitly reset by a human transition.
+    const prepared = state.preparedStage?.stage;
+    if (prepared && allowed.includes(prepared))
+        allowed = [prepared];
     const select = allowed.length > 1;
     const next = select ? null : (allowed[0] ?? null);
     const nextHumanGate = next && profile.stages.find((s) => s.id === next)?.humanGate ? next

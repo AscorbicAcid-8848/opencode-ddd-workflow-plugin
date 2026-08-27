@@ -58,6 +58,13 @@ export interface ApprovedModelContract {
 
 const text = (value: unknown) => String(value ?? "").trim()
 const list = (value: unknown) => Array.isArray(value) ? value.map(text).filter(Boolean) : []
+const decisionList = (value: unknown) => Array.isArray(value) ? value.map((item) => {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return text(item)
+  const decision = text((item as any).decision)
+  const rationale = text((item as any).rationale)
+  const id = text((item as any).id)
+  return [id, decision, rationale ? `理由：${rationale}` : ""].filter(Boolean).join("；")
+}).filter(Boolean) : []
 
 function mergeById<T extends { id: string }>(current: T[], patch: T[]): T[] {
   const merged = new Map(current.map((item) => [item.id, item]))
@@ -101,7 +108,7 @@ export function normalizeStructuredPlan(raw: any, current?: StructuredDeliveryPl
     title: text(raw?.title) || current?.title || "",
     objective: text(raw?.objective) || current?.objective || "",
     nonGoals: raw?.nonGoals === undefined ? (current?.nonGoals ?? []) : list(raw.nonGoals),
-    designDecisions: raw?.designDecisions === undefined ? (current?.designDecisions ?? []) : list(raw.designDecisions),
+    designDecisions: raw?.designDecisions === undefined ? (current?.designDecisions ?? []) : decisionList(raw.designDecisions),
     capabilities: mergeById(current?.capabilities ?? [], capabilities),
     slices: mergeById(current?.slices ?? [], slices),
   }
@@ -232,13 +239,13 @@ export function compileDeliveryMilestoneSections(
     ].join("\n"),
     "交付范围": [`业务目标：${plan.objective}`, "", "批准设计决策：", ...(plan.designDecisions.length ? plan.designDecisions.map((item) => `- ${item}`) : ["- 沿用里程碑 IV 已批准设计。"]), "", "明确不做：", ...(plan.nonGoals.length ? plan.nonGoals.map((item) => `- ${item}`) : ["- 无额外范围。"])].join("\n"),
     "纵向交付切片": sliceDetails,
-    "交付追踪矩阵": ["战术模型—切片—文件覆盖：", "| 切片 | 验收标准 | 模型元素 | 不变量 | 生产文件 | 测试文件 |", "|---|---|---|---|---|---|", ...traceRows, "", "模块—层—依赖机器合同：生产文件必须遵循里程碑 IV 已批准的上下文优先分层和依赖方向；编码阶段不得另建未批准入口或基础设施。"].join("\n"),
+    "交付追踪矩阵": ["纵向切片—验收—文件映射：", "", "战术模型—切片—文件覆盖：", "| 切片 | 验收标准 | 模型元素 | 不变量 | 生产文件 | 测试文件 |", "|---|---|---|---|---|---|", ...traceRows, "", "模块—层—依赖机器合同：生产文件必须遵循里程碑 IV 已批准的上下文优先分层和依赖方向；编码阶段不得另建未批准入口或基础设施。"].join("\n"),
     "OpenSpec 变更映射": [`OpenSpec change 映射：${workflowId}`, "OpenSpec Requirement/Scenario 追踪：", ...requirementRows, `- 纵向切片：${plan.slices.map((slice) => slice.id).join("、")}`].join("\n"),
     "测试与验证计划": ["架构验证命令：复用下列每个切片已校验的工程验证命令，并在真实消费者链路中核验已批准的模块边界和依赖方向。", "", ...plan.slices.map((slice) => `### ${slice.id}\n- 验收：${slice.acceptanceCriteria.join("；")}\n- 测试文件：${slice.testPaths.join("；")}\n- 验证命令：${slice.verification.join("；")}`)].join("\n\n"),
     "Git 交付计划": [`Git 基线与回滚策略：编码开始前记录当前分支与 HEAD；每个切片形成一个独立提交。`, ...plan.slices.map((slice) => `- ${slice.id}：验证通过后独立提交；失败或回退时执行该切片批准的回滚策略：${slice.rollback}`), "- 禁止把多个未验证切片合并为一次提交；提交标识写入实现证据。"].join("\n"),
     "风险、迁移与上线": plan.slices.map((slice) => `- ${slice.id} 兼容与迁移：${slice.compatibility}；回滚：${slice.rollback}`).join("\n"),
     "备选交付方案与建议": `推荐按当前 ${plan.slices.length} 个纵向切片渐进交付，每个切片都产生真实业务结果并可独立验证。若合并切片会扩大失败与回滚范围；若按技术层拆分则无法独立业务验收，因此均不推荐。`,
-    "证据与追踪": [`- OpenSpec change：${workflowId}`, `- 结构化计划哈希：${createHash("sha256").update(JSON.stringify(plan)).digest("hex")}`, `- 模型合同哈希：${contract.sourceSha256 ?? "由当前 model-contract.json 提供"}`, `- 切片数量：${plan.slices.length}`, "- 本文由运行时从已校验的结构化计划和批准模型合同确定性编译，未接受模型自由改写。"].join("\n"),
+    "证据与追踪": [`- OpenSpec change：${workflowId}`, `- 结构化计划哈希：${createHash("sha256").update(JSON.stringify(plan)).digest("hex")}`, `- model-contract.json 哈希：${contract.sourceSha256 ?? "由当前批准模型合同提供"}`, `- 切片数量：${plan.slices.length}`, "- 本文由运行时从已校验的结构化计划和批准模型合同确定性编译，未接受模型自由改写。"].join("\n"),
   }
   return { summary, sections }
 }

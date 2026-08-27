@@ -99,6 +99,10 @@ export interface WorkflowState {
   createdAt: string
   updatedAt: string
   runtimeSessionId?: string
+  preparedStage?: {
+    stage: string
+    preparedAt: string
+  }
   checkpoints: Checkpoint[]
   openSpec?: { changeId?: string; archivedAt?: string; status?: string }
   runtimeBlock?: { stage: string; reason: string; evidence: string[]; remediation: string[]; blockedAt: string }
