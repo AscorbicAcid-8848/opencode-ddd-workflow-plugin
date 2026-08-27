@@ -1741,6 +1741,21 @@ test("tactical event semantics reject query-return events in Chinese and English
   assert.deepEqual(queryPseudoEvents(text), ["轨迹已返回", "DailyTrailReturned", "一日轨迹已生成"])
 })
 
+test("tactical event storm rejects concrete database uniqueness mechanisms", () => {
+  const findings = validateStageSemantics(
+    { originalRequest: "新增用户一日光顾店铺轨迹", checkpoints: [], humanDecisions: [] },
+    { id: "05-design-level-event-storm", scopeContract: { id: "context-discovery" } },
+    {
+      summary: "识别同日同店幂等规则和并发热点。",
+      sections: {
+        "战术事件风暴": "RecordVisit 命令触发光顾已记录。",
+        "并发、事务与持久化热点": "同一用户同一商铺同一日只记一次，使用 (userId, shopId, visitDate) 唯一约束实现。",
+      },
+    },
+  )
+  assert.ok(findings.some((finding) => finding.code === "TACTICAL_EVENTSTORM_IMPLEMENTATION_LEAK"))
+})
+
 test("tactical design derives automatic-trigger constraints from approved human decisions", () => {
   const findings = validateStageSemantics(
     {

@@ -829,12 +829,15 @@ export function validateStageSemantics(state: WorkflowState, stage: any, input: 
   }
 
   if (stage.scopeContract?.id === "context-discovery") {
-    const forbidden = ["复合索引", "索引设计", "分桶键", "分库", "分表", "表名", "字段类型", "数据库选型", "Redis", "Kafka", "SQL"]
+    const forbidden = [
+      "复合索引", "索引设计", "唯一索引", "唯一约束", "联合唯一", "UNIQUE",
+      "数据库约束", "分桶键", "分库", "分表", "表名", "字段类型", "数据库选型", "Redis", "Kafka", "SQL",
+    ]
     for (const [heading, text] of entries) {
       if (heading === "证据与追踪") continue
       const hits = forbidden.filter((term) => hasAffirmativeOccurrence(text, term))
       if (hits.length) addFinding("TACTICAL_EVENTSTORM_IMPLEMENTATION_LEAK", heading, hits,
-        "战术事件风暴只能识别访问模式、事务/并发与持久化热点，具体索引、分片、表和中间件方案归战术设计")
+        "战术事件风暴只能识别业务幂等需求、访问模式、事务/并发与持久化热点；唯一约束、索引、分片、表和中间件都是战术设计的实现决策")
     }
     const pseudoEvents = queryPseudoEvents(String(input.sections?.["战术事件风暴"] ?? ""))
     if (pseudoEvents.length) addFinding("TACTICAL_EVENT_NOT_STATE_CHANGE", "战术事件风暴", pseudoEvents,
