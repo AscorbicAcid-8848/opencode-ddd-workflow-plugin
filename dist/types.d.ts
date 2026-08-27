@@ -2,6 +2,17 @@ export type WorkflowType = "add-feature" | "refactor-system" | "create-system";
 export type ReviewDecision = "approve" | "revise" | "reject";
 export type OpenSpecArtifact = "proposal" | "specs" | "design" | "tasks" | "apply";
 export type LifecycleAction = "init" | "prepare" | "evidence-bundle" | "complete-stage" | "section" | "finalize" | "submit" | "review" | "status" | "block" | "archive" | "openspec" | "openspec-plan";
+export interface HumanDecisionResolution {
+    selectedCandidateId?: string;
+    resolvedDecisions?: string[];
+}
+export interface DeliveryPlanState {
+    source: "structured-openspec-plan";
+    sliceIds: string[];
+    dependencies: Record<string, string[]>;
+    completedSliceIds: string[];
+    approvedAt?: string;
+}
 export interface StageContract {
     id: string;
     document: string;
@@ -71,6 +82,7 @@ export interface Checkpoint {
     completedSlices?: number;
     sliceId?: string;
     ambiguityResolution?: unknown;
+    humanReviewSummary?: string;
 }
 export interface WorkflowState {
     schemaVersion: string;
@@ -84,6 +96,7 @@ export interface WorkflowState {
     currentStage: string;
     createdAt: string;
     updatedAt: string;
+    runtimeSessionId?: string;
     checkpoints: Checkpoint[];
     openSpec?: {
         changeId?: string;
@@ -101,6 +114,16 @@ export interface WorkflowState {
         head: string;
         capturedAt: string;
     };
+    deliveryPlan?: DeliveryPlanState;
+    humanDecisions?: Array<{
+        milestone: string;
+        stage: string;
+        selectedCandidateId?: string;
+        resolvedDecisions: string[];
+        deferredToTacticalFamilies?: string[];
+        reviewer: string;
+        decidedAt: string;
+    }>;
     [key: string]: unknown;
 }
 export interface Transition {

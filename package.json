@@ -1,6 +1,6 @@
 {
   "name": "opencode-ddd-plugin-v2",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Lightweight OpenCode SDK plugin for DDD/OpenSpec workflows. LLM-friendly state machine + skills.",
   "type": "module",
   "exports": "./dist/index.js",

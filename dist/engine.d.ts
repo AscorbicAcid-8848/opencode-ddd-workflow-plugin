@@ -1,5 +1,5 @@
 import { workflowTransition } from "./transition.js";
-import type { Identity, WorkflowState, Transition, ReviewDecision, OpenSpecArtifact, ValidationFinding } from "./types.js";
+import type { Identity, WorkflowState, Transition, ReviewDecision, OpenSpecArtifact, ValidationFinding, HumanDecisionResolution } from "./types.js";
 export interface InitInput extends Identity {
     title: string;
     request: string;
@@ -22,6 +22,7 @@ export interface ReviewInput extends Identity {
     decision: ReviewDecision;
     reviewer: string;
     feedback?: string;
+    resolution?: HumanDecisionResolution;
 }
 export interface StatusInput extends Identity {
     view?: "compact" | "full";

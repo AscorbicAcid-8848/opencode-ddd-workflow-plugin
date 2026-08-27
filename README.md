@@ -17,7 +17,7 @@ models up:
 - **One tool**: `ddd_lifecycle` with a compact lifecycle action set.
 - **One-call stage submit**: `complete-stage` accepts `{ stage, summary, sections }` — Markdown section content, no
   items/relations/deferredItems graph.
-- **One-call OpenSpec plan**: `openspec-plan` writes proposal, delta specs, design and tasks without four extra model turns.
+- **Structured OpenSpec compiler**: `openspec-plan` accepts business requirements and vertical slices; TypeScript generates proposal, Delta Specs, design, tasks, and `roadmap.json`.
 - **Focused hard gates**: legal stage order, complete human documents, intent preservation,
   intrinsic stage scope, real implementation Commit and honest runtime blocking.
 - **Bounded execution**: evidence and implementation stages reject subagent fan-out,
@@ -79,8 +79,11 @@ Complete one stage atomically:
 Review:
 ```json
 { "action": "review", "input": { "stage": "02-big-picture-event-storm",
-  "decision": "approve", "reviewer": "pm" } }
+  "decision": "approve", "reviewer": "pm",
+  "resolution": { "selectedCandidateId": "browse-trigger" } } }
 ```
+
+Delivery planning uses structured data rather than model-authored OpenSpec Markdown. Each slice declares its stable ID, dependencies, real consumer, acceptance criteria, `ME-*`/`INV-*` coverage, paths, verification, compatibility, and rollback. The runtime compiles the artifacts and only dependency-ready approved slice IDs can enter Coding.
 
 ## Architecture
 
@@ -92,6 +95,7 @@ src/
   catalog.ts    loads workflow-profiles.json
   documents.ts  milestone skeleton + section publishing
   openspec.ts   OpenSpec CLI integration
+  delivery-plan.ts structured plan validation and OpenSpec/roadmap compilation
   state.ts      workflow-state.json load/save
   fs.ts         filesystem helpers
   types.ts      core types

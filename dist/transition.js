@@ -1,5 +1,10 @@
 import { milestoneFor, nextHumanGateAfter, stageIndex, writersOf } from "./catalog.js";
 function implementationProgress(state) {
+    if (state.deliveryPlan) {
+        const planned = state.deliveryPlan.sliceIds.length;
+        const completed = new Set(state.deliveryPlan.completedSliceIds.filter((id) => state.deliveryPlan.sliceIds.includes(id))).size;
+        return { known: planned > 0, complete: planned > 0 && completed === planned, completed, planned };
+    }
     const planned = [...state.checkpoints].reverse()
         .map((c) => c.plannedSlices)
         .find((n) => typeof n === "number" && Number.isInteger(n) && n >= 0);
@@ -91,7 +96,8 @@ export function workflowTransition(profile, state) {
             ...base, stageRole: "human-gate", documentRole: "human-review-document", humanReviewRequired: true,
             mustContinue: false, stopAllowed: true, stopReason: "await-human-review", requiredAction: "await-human-review",
             nextHumanGate: latest.stage,
-            message: `里程碑 ${milestone?.roman ?? "?"} 已形成，请人工验收。验收清单：\n${(latest.reviewChecklist ?? []).map((c) => `- ${c}`).join("\n")}`,
+            message: latest.humanReviewSummary
+                ?? `里程碑 ${milestone?.roman ?? "?"} 已形成，请人工验收。验收清单：\n${(latest.reviewChecklist ?? []).map((c) => `- ${c}`).join("\n")}`,
         });
     if (state.status === "revision_requested") {
         const explicit = feedbackOwnerStage(profile, latest, idx);

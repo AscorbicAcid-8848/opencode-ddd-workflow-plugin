@@ -1,5 +1,5 @@
 import path from "node:path"
-import { exists } from "./fs.js"
+import { exists, readJson } from "./fs.js"
 import type { StageClaim, StageClaimContract, ValidationFinding, WorkflowState } from "./types.js"
 
 const evidenceBaselineContract: StageClaimContract = {
@@ -66,6 +66,11 @@ function hasUnnegatedDesignDecision(text: string): boolean {
   // the solution and model deliberately undecided.
   if (/^(?:原始)?(?:请求|需求)(?:要求|提及|是|为|包含|明确)/u.test(compact)) return false
   if (/(?:假设|待确认|未证实|尚未证实|证据缺口|evidence-gap|open-question)/iu.test(compact)) return false
+  // A constraint on a hypothetical new artifact is still target design even
+  // when phrased negatively ("the new table must not...").
+  if (/(?:新增|新建)[^。；\n]{0,24}(?:表|接口|缓存|Redis|模块)[^。；\n]{0,36}(?:不得|不应|不能|避免)/iu.test(compact)) return true
+  if (/(?:Redis|缓存|新增接口)[^。；\n]{0,30}(?:需|须|必须|应当|应该)[^。；\n]{0,20}(?:避免|采用|使用|遵循)/iu.test(compact)) return true
+  if (/(?:新增[^。；\n]{0,16}|新功能[^。；\n]{0,16}|轨迹记录[^。；\n]{0,16})(?:应|需|须|必须)[^。；\n]{0,36}(?:异步|低延迟|Redis|缓存|接口路径|数据表|持久化)/iu.test(compact)) return true
   if (/(?:不|未|无需|禁止|不得|不应|不能)(?:引入|新增|新建|拆分|迁移|采用|使用|改变|修改)/u.test(compact)) return false
   const patterns = [
     /(?:回滚即|回滚通过|回滚方案|回滚方式|移除(?:新)?入口)/u,
@@ -108,6 +113,18 @@ function isDeclaredUncertainty(sentence: string, claims: StageClaim[]): boolean 
     && (sentence.includes(claim.statement) || claim.statement.includes(sentence)))
 }
 
+function isUnprovenTargetBehavior(sentence: string, claims: StageClaim[]): boolean {
+  const compact = sentence.replace(/\s+/gu, "")
+  const behaviorContract = /(?:\bGiven\b[\s\S]{0,160}\bWhen\b[\s\S]{0,160}\bThen\b)|(?:应|应该|应当|必须|须|需要|将)(?:返回|包含|记录|产生|创建|支持|允许|拒绝|报错|写入|保存|展示)|(?:返回|记录|写入|保存)[^。；\n]{0,50}(?:401|403|错误|轨迹|列表)/iu.test(sentence)
+  if (!behaviorContract) return false
+  if (/(?:待确认|未明确|尚未决定|是否|候选|开放问题|evidence-gap|open-question)/iu.test(compact)) return false
+  if (isProvenCurrentDecision(sentence, claims)) return false
+  const preservedCompatibility = /(?:不得|不应|不能)(?:破坏|改变|修改)|(?:保持|兼容)(?:现有|既有)/u.test(compact)
+    && claims.some((claim) => claim.kind === "compatibility-constraint"
+      && (sentence.includes(claim.statement) || claim.statement.includes(sentence)))
+  return !preservedCompatibility
+}
+
 export async function validateStageClaims(
   state: WorkflowState,
   scopeId: string | undefined,
@@ -128,6 +145,11 @@ export async function validateStageClaims(
   }
 
   const claims = rawClaims as StageClaim[]
+  const snapshotFile = path.join(state.artifactRoot, ".ddd", "workbench", "evidence-snapshot.json")
+  const snapshot = await exists(snapshotFile) ? await readJson<any>(snapshotFile) : {}
+  const authorizedSearch = new Map<string, string[]>((Array.isArray(snapshot.authorizedSearchEvidence)
+    ? snapshot.authorizedSearchEvidence : []).map((item: any) => [String(item?.ref ?? ""),
+      Array.isArray(item?.absentTerms) ? item.absentTerms.map(String) : []]))
   const ids = new Set<string>()
   const allowedKinds = new Set(contract.allowedKinds)
   const allowedMaturities = new Set(contract.allowedMaturities)
@@ -174,6 +196,16 @@ export async function validateStageClaims(
         findings.push(finding("CLAIM_EVIDENCE_INVALID", `${base}.evidenceRefs`, `不可解析或仍为占位符的证据：${String(reference)}。`))
         continue
       }
+      if (reference.startsWith("search:") && reference !== "search:openspec/specs-and-prior-changes") {
+        const absentTerms = authorizedSearch.get(reference)
+        if (!absentTerms) {
+          findings.push(finding("SEARCH_EVIDENCE_NOT_ISSUED", `${base}.evidenceRefs`,
+            `负向搜索引用不是 evidence-bundle 签发的证据：${reference}。`))
+        } else if (!absentTerms.some((term) => claim.statement.toLocaleLowerCase().includes(term.toLocaleLowerCase()))) {
+          findings.push(finding("SEARCH_EVIDENCE_SUBJECT_MISMATCH", `${base}.statement`,
+            `该负向搜索只证明这些精确代码词未命中：${absentTerms.join("、")}；不能据此扩大为其他能力或实体不存在。`))
+        }
+      }
       const relativePath = normalizeReferencePath(reference)
       if (relativePath) {
         const absolute = path.resolve(state.projectRoot, relativePath)
@@ -213,6 +245,14 @@ export async function validateStageClaims(
 
   const narrative = Object.values(sections).join("\n")
   for (const sentence of sentences(narrative)) {
+    if (isUnprovenTargetBehavior(sentence, claims)) {
+      findings.push(finding(
+        "EVIDENCE_STAGE_TARGET_BEHAVIOR_LEAK",
+        "sections",
+        `现状证据阶段把尚未批准的新功能行为写成了验收规则：${sentence.slice(0, 120)}`,
+        "本阶段只记录 AS-IS 行为与兼容约束；新功能触发、结果、授权和异常语义请改为 open-question，交由战略事件风暴和人工里程碑决定。",
+      ))
+    }
     if (hasUnnegatedDesignDecision(sentence) && !isProvenCurrentDecision(sentence, claims) && !isDeclaredUncertainty(sentence, claims)) {
       findings.push(finding(
         "EVIDENCE_STAGE_TARGET_DESIGN_LEAK",

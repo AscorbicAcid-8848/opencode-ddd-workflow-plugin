@@ -1,4 +1,5 @@
 import path from "node:path"
+import { createHash } from "node:crypto"
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { exists } from "./fs.js"
 
@@ -33,11 +34,14 @@ export async function evidenceBundle(projectRoot: string, workflowId: string, ra
   const files: string[] = []
   for (const root of sourceRoots) await walk(projectRoot, root, files, 500)
   const lowered = searchTerms
+  const seenTerms = new Set<string>()
   const matches: Array<{ file: string; score: number; excerpts: Array<{ ref: string; text: string }> }> = []
   for (const file of files) {
     const absolute = path.join(projectRoot, file)
     if ((await stat(absolute)).size > 160_000) continue
     const content = await readFile(absolute, "utf8").catch(() => "")
+    const contentLower = content.toLocaleLowerCase()
+    for (const term of lowered) if (contentLower.includes(term)) seenTerms.add(term)
     const lines = content.split(/\r?\n/u)
     const fileLower = file.toLocaleLowerCase()
     let score = lowered.reduce((sum, term) => sum + (fileLower.includes(term) ? (term.length >= 6 ? 45 : 20) : 0), 0)
@@ -73,10 +77,18 @@ export async function evidenceBundle(projectRoot: string, workflowId: string, ra
   const topLevel = (await readdir(projectRoot, { withFileTypes: true })).map((entry) => entry.name).filter((name) => !ignored.has(name)).sort()
   const currentSpecs = await names(path.join(projectRoot, "openspec", "specs"))
   const priorChanges = (await names(path.join(projectRoot, "openspec", "changes"))).filter((name) => name !== "archive" && name !== workflowId)
+  const absentTerms = lowered.filter((term) => !seenTerms.has(term))
+  const negativeSearchRef = `search:evidence-bundle:${createHash("sha256").update(`${workflowId}\0${files.length}\0${lowered.join("|")}`).digest("hex").slice(0, 12)}`
   const bundle = {
     schemaVersion: "ddd-evidence-bundle/v1", terms, expandedSearchTerms: searchTerms, repositoryShape: topLevel, sourceFileCount: files.length,
     matches: matches.slice(0, 8).map(({ file, excerpts }) => ({ file, excerpts })),
     openSpecIndex: { currentSpecs, priorChanges, citation: "search:openspec/specs-and-prior-changes" },
+    negativeSearchEvidence: absentTerms.length ? {
+      ref: negativeSearchRef,
+      absentTerms,
+      scope: sourceRoots,
+      rule: "该引用只证明 absentTerms 中的精确代码词在本次完整源码文件扫描中未命中；不得据此声称整个业务能力、模块或其他实体不存在。",
+    } : null,
     citationRule: "事实的 evidence_refs 必须逐字复制 excerpt.ref（code:相对路径#Lx-Ly）；不得只写裸路径。未出现的行为只写为 evidence-gap/open-question，不得在缺口中决定新增表、模型、接口或实现；不再扩大搜索。",
     requiredCoverage: ["事实、假设与待确认项", "可执行验收约束", "现状代码证据索引", "验证基线", "OpenSpec历史战略基线"],
     responseBudget: { totalSectionChars: "900-1600", observations: "4-6" },
@@ -89,6 +101,7 @@ export async function evidenceBundle(projectRoot: string, workflowId: string, ra
     repositoryShape: topLevel,
     codeEvidence: matches.slice(0, 4).flatMap(({ excerpts }) => excerpts.slice(0, 1)).map(({ ref, text }) => ({ ref, text })),
     openSpecIndex: bundle.openSpecIndex,
+    authorizedSearchEvidence: absentTerms.length ? [{ ref: negativeSearchRef, absentTerms }] : [],
   }
   const workbench = path.join(projectRoot, "openspec", "changes", workflowId, "ddd", ".ddd", "workbench")
   await mkdir(workbench, { recursive: true })

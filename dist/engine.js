@@ -12,8 +12,11 @@ export function requiresScenarioClarification(request) {
     const text = String(request ?? "").trim();
     if (!text)
         return true;
-    const hasScenarioStructure = /(?:当|如果|若|每次|一旦|成功|失败|返回|展示|查询|记录|允许|禁止|必须|不得|仅限|通过)[^。；\n]{1,80}/u.test(text)
-        || /(?:when|if|after|before|must|shall|return|record|query|display)\b/iu.test(text);
+    const hasScenarioStructure = /(?:当|如果|若|每次|一旦)[^。；\n]{1,60}(?:时|后|前|则|就)/u.test(text)
+        || /(?:必须|不得|仅限|允许|禁止)[^。；\n]{1,80}/u.test(text)
+        || /(?:查询|记录|展示)[^。；\n]{1,50}(?:返回|形成|保存|展示|成功|失败|为空)/u.test(text)
+        || /\b(?:when|if|after|before)\b[^.\n]{1,80}\b(?:then|return|record|display)\b/iu.test(text)
+        || /\b(?:must|shall|must not|may only)\b/iu.test(text);
     return !hasScenarioStructure && text.length < 48;
 }
 async function resolveRoot(id) {
@@ -101,6 +104,7 @@ export async function prepare(input) {
     const milestoneMissing = unfilledHeadings(currentCandidate);
     const stageCard = {
         stageId: stage.id,
+        scopeContractId: stage.scopeContract?.id ?? null,
         stageTitle: stageTitle(stage),
         humanGate: Boolean(stage.humanGate),
         ...(stage.adviceRequired ? { adviceRequired: true } : {}),
@@ -118,13 +122,18 @@ export async function prepare(input) {
             originalRequest: state.originalRequest ?? "",
             rule: "本阶段只能细化原始请求与已批准上游决策；新增可观察业务能力必须先回到相应人工里程碑批准，禁止从 workflow_id、代码命名或技术可能性推断需求。",
         },
+        approvedHumanDecisions: state.humanDecisions ?? [],
         ...(stage.scopeContract?.id === "system-discovery" && requiresScenarioClarification(state.originalRequest ?? "") ? {
             ambiguityContract: {
                 requiresHumanChoice: true,
                 reason: "原始请求只给出能力名称，未明确触发条件、业务结果或异常语义。",
-                presentation: "至少给出两套候选业务解释；每套分别画候选事件流并说明取舍。明确写出：人工批准前，任何候选均不进入本次目标、唯一主流程或已确认规则。",
-                submitField: "complete-stage.input.ambiguityResolution={status:'unresolved',candidates:[{id,label},{id,label}],affectedDecisions:['触发条件',...]}；候选 id 与自然语言标题自由命名，不要求固定措辞。",
-                forbids: ["把代码中的现有入口自动解释为新能力触发点", "把候选查询、记录、时间或权限规则写成已批准需求"],
+                presentation: "只围绕直接阻塞本功能业务语义的 1 至 4 个高影响决策，给出 2 至 3 套完整候选解释及事件流。人工批准前，候选不得进入唯一主流程或已确认规则。",
+                submitField: "complete-stage.input.ambiguityResolution={status:'unresolved',candidates:[{id,label},{id,label}],affectedDecisions:['高影响决策及候选取值']}。affectedDecisions 最多 4 项。",
+                forbids: [
+                    "把代码中的现有入口自动解释为新能力触发点",
+                    "把候选查询、记录、时间或权限规则写成已批准需求",
+                    "主动扩展匿名访问、历史保留、补偿、推荐分析或跨时区等邻接需求，除非原始请求或现状证据明确要求",
+                ],
             },
         } : {}),
         unfilledSectionHeadings: milestoneMissing.filter((heading) => allowedSectionHeadings.includes(heading)),
@@ -141,7 +150,15 @@ export async function prepare(input) {
             } } : {}),
         stageBoundary: stageBoundary(stage.scopeContract?.id),
         ...(stage.implementationEvidence ? { requiredSubmitMetadata: { sliceId: "当前切片稳定 ID" } } : {}),
-        ...(stage.deliveryAssetGate ? { requiredSubmitMetadata: { plannedSlices: "计划切片数量" } } : {}),
+        ...(stage.deliveryAssetGate ? {
+            requiredSubmitMetadata: { plannedSlices: "必须等于结构化 OpenSpec 计划中的切片数量" },
+            structuredPlanningContract: {
+                action: "openspec-plan",
+                rule: "提交结构化 plan；运行时编译 proposal/specs/design/tasks/roadmap，禁止模型手写 OpenSpec Markdown。",
+                required: ["title", "objective", "capabilities[].requirements[].scenarios[]", "slices[]"],
+                sliceRequired: ["id", "title", "outcome", "consumer", "dependsOn", "acceptanceCriteria", "modelElementIds", "invariantIds", "productionPaths", "testPaths", "verification", "compatibility", "rollback"],
+            },
+        } : {}),
         allowedSectionHeadings,
     };
     return { ...transition, stageCard };
@@ -206,14 +223,33 @@ function collectUpstream(state, document) {
         return `[${checkpoint.stage}] ${(checkpoint.summary + decision).slice(0, 520)}`;
     });
 }
+function conciseReviewText(value, limit = 320) {
+    const plain = value.replace(/^#{1,6}\s+/gmu, "").replace(/[`*_>]/gu, "").replace(/\s+/gu, " ").trim();
+    return plain.length <= limit ? plain : `${plain.slice(0, limit)}…`;
+}
+function humanReviewSummary(stage, milestone, summary, sections, ambiguity) {
+    const hidden = new Set(["证据与追踪", "输入场景与现状事实", "业务验收记录"]);
+    const results = Object.entries(sections).filter(([heading, content]) => !hidden.has(heading) && content.trim())
+        .slice(0, 5).map(([heading, content]) => `- ${heading}：${conciseReviewText(content)}`);
+    const candidates = ambiguity?.status === "unresolved" && Array.isArray(ambiguity.candidates)
+        ? ["", "需要选择的业务候选：", ...ambiguity.candidates.map((candidate) => `- ${candidate.id}：${candidate.label}`)] : [];
+    return [
+        `# 里程碑 ${milestone?.roman ?? "?"}：${stage.reviewTitle ?? milestone?.title ?? "人工验收"}`,
+        "", `本阶段结论：${summary}`, "", "关键业务与设计结果：", ...results,
+        ...candidates, "", "请重点确认：", ...(stage.checklist ?? []).slice(0, 5).map((item) => `- ${item}`),
+        "", "回复 `批准`，或回复 `修改：...` 并指出不符合业务认知的决策。",
+    ].join("\n");
+}
 function stageDraftPath(root, stageId) {
     return path.join(root, ".ddd", "workbench", `${stageId}.draft.json`);
 }
-function mergeClaims(current, increment) {
+function mergeClaims(current, increment, replacedHeadings = new Set()) {
     if (!Array.isArray(current) && !Array.isArray(increment))
         return increment ?? current;
     const merged = new Map();
-    for (const claim of [...(Array.isArray(current) ? current : []), ...(Array.isArray(increment) ? increment : [])]) {
+    const retained = (Array.isArray(current) ? current : [])
+        .filter((claim) => !replacedHeadings.has(String(claim?.documentSection ?? "")));
+    for (const claim of [...retained, ...(Array.isArray(increment) ? increment : [])]) {
         const key = typeof claim?.id === "string" && claim.id.trim() ? claim.id : `anonymous-${merged.size}`;
         merged.set(key, claim);
     }
@@ -226,7 +262,7 @@ async function mergeStageDraft(root, input) {
         ...input,
         summary: input.summary || draft?.summary || "",
         sections: { ...(draft?.sections ?? {}), ...(input.sections ?? {}) },
-        claims: mergeClaims(draft?.claims, input.claims),
+        claims: mergeClaims(draft?.claims, input.claims, new Set(Object.keys(input.sections ?? {}))),
         ambiguityResolution: input.ambiguityResolution ?? draft?.ambiguityResolution,
         plannedSlices: input.plannedSlices ?? draft?.plannedSlices,
         sliceId: input.sliceId ?? draft?.sliceId,
@@ -240,7 +276,38 @@ export async function submit(input) {
     const partial = input.finalize === false;
     const findings = await validateSubmission(root, profile, state, stage, merged, { partial });
     if (findings.some((f) => f.severity === "blocking")) {
-        return { ...workflowTransition(profile, state), findings, documentPath: documentPath(root, profile, stage.document) };
+        // Deliberately partial drafts are only persisted after validation. This
+        // keeps the workbench from becoming a bypass for out-of-stage content.
+        if (partial)
+            return { ...workflowTransition(profile, state), findings, documentPath: documentPath(root, profile, stage.document) };
+        const file = stageDraftPath(root, stage.id);
+        const previous = await exists(file) ? await readJson(file) : undefined;
+        const signature = findings.filter((finding) => finding.severity === "blocking")
+            .map((finding) => `${finding.code}:${finding.path}`).sort().join("|");
+        const repeated = previous?.validation?.signature === signature ? previous.validation.repeated + 1 : 1;
+        const allowedHeadings = new Set(writableHeadingsForStage(stage));
+        const safeSections = Object.fromEntries(Object.entries(merged.sections ?? {})
+            .filter(([heading]) => allowedHeadings.has(heading)));
+        const safeClaims = Array.isArray(merged.claims)
+            ? merged.claims.filter((claim) => allowedHeadings.has(String(claim?.documentSection ?? "")))
+            : merged.claims;
+        await writeJson(file, {
+            summary: merged.summary, sections: safeSections, claims: safeClaims,
+            ambiguityResolution: merged.ambiguityResolution,
+            plannedSlices: merged.plannedSlices, sliceId: merged.sliceId,
+            validation: { signature, repeated },
+        });
+        return {
+            ...workflowTransition(profile, state), findings,
+            documentPath: documentPath(root, profile, stage.document),
+            draft: {
+                saved: true, repairOnly: true, repeatedFindingSet: repeated,
+                retryableByModel: repeated < 3,
+                nextAction: repeated < 3
+                    ? "候选稿已保存。下一次只提交 findings.path 指向的章节和必要元数据，不要重写整篇文档。"
+                    : "相同阻塞项已连续出现 3 次。停止自动重试并报告阻塞，避免继续消耗 Token。",
+            },
+        };
     }
     if (partial) {
         await writeJson(stageDraftPath(root, stage.id), {
@@ -285,8 +352,14 @@ export async function submit(input) {
         plannedSlices: merged.plannedSlices,
         sliceId: merged.sliceId,
         ambiguityResolution: merged.ambiguityResolution,
+        humanReviewSummary: stage.humanGate && isLastWriter
+            ? humanReviewSummary(stage, milestone, merged.summary, merged.sections, merged.ambiguityResolution) : undefined,
     };
     state.checkpoints.push(checkpoint);
+    if (stage.implementationEvidence && merged.sliceId && state.deliveryPlan) {
+        if (!state.deliveryPlan.completedSliceIds.includes(merged.sliceId))
+            state.deliveryPlan.completedSliceIds.push(merged.sliceId);
+    }
     if (state.status === "runtime_blocked") {
         state.status = "active";
         delete state.runtimeBlock;
@@ -323,6 +396,18 @@ async function validateSubmission(root, profile, state, stage, input, options = 
         findings.push({ code: "PLANNED_SLICES_REQUIRED", path: "plannedSlices", severity: "blocking",
             message: "交付计划必须声明大于 0 的 plannedSlices，最终验收门禁以此判断全部纵向切片是否完成。" });
     }
+    if (!options.partial && stage.deliveryAssetGate && state.deliveryPlan) {
+        if (input.plannedSlices !== state.deliveryPlan.sliceIds.length)
+            findings.push({
+                code: "PLANNED_SLICES_ROADMAP_MISMATCH", path: "plannedSlices", severity: "blocking",
+                message: `plannedSlices 必须等于批准路线图切片数 ${state.deliveryPlan.sliceIds.length}，不能使用独立计数。`,
+            });
+    }
+    if (!options.partial && stage.deliveryAssetGate && !state.deliveryPlan)
+        findings.push({
+            code: "STRUCTURED_DELIVERY_PLAN_REQUIRED", path: "deliveryPlan", severity: "blocking",
+            message: "里程碑 V 必须先通过 openspec-plan 提交结构化路线图，由运行时生成 OpenSpec 工件和切片状态。",
+        });
     if (!options.partial && stage.openspecArtifactGate) {
         const artifacts = await planningArtifacts(state.projectRoot, state.workflowId);
         if (!artifacts.complete)
@@ -345,6 +430,20 @@ async function validateSubmission(root, profile, state, stage, input, options = 
     if (!options.partial && stage.implementationEvidence && !input.sliceId?.trim()) {
         findings.push({ code: "SLICE_ID_REQUIRED", path: "sliceId", severity: "blocking",
             message: "实现阶段必须提供稳定 sliceId，并为每个纵向切片形成独立实现证据。" });
+    }
+    if (!options.partial && stage.implementationEvidence && input.sliceId && state.deliveryPlan) {
+        if (!state.deliveryPlan.sliceIds.includes(input.sliceId))
+            findings.push({
+                code: "SLICE_NOT_IN_APPROVED_ROADMAP", path: "sliceId", severity: "blocking",
+                message: `切片 ${input.sliceId} 不在里程碑 V 批准的路线图中。`,
+            });
+        const incompleteDependencies = (state.deliveryPlan.dependencies[input.sliceId] ?? [])
+            .filter((dependency) => !state.deliveryPlan.completedSliceIds.includes(dependency));
+        if (incompleteDependencies.length)
+            findings.push({
+                code: "SLICE_DEPENDENCY_NOT_READY", path: "sliceId", severity: "blocking",
+                message: `切片 ${input.sliceId} 的前置切片尚未完成：${incompleteDependencies.join("、")}。`,
+            });
     }
     if (!options.partial && stage.implementationEvidence && state.checkpoints.some((checkpoint) => checkpoint.stage === stage.id && checkpoint.sliceId === input.sliceId)) {
         findings.push({ code: "SLICE_ALREADY_COMPLETED", path: "sliceId", severity: "blocking",
@@ -443,9 +542,47 @@ export function containsRequiredConcept(text, concept) {
     return false;
 }
 export function queryPseudoEvents(text) {
-    const chinese = /(?:事件|领域事件|\bemits\b)\s*[：:]?\s*([^→\n。；]{0,40}(?:查询|详情|列表|轨迹|结果|页面)[^→\n。；]{0,16}(?:已查询|已返回|已展示|已读取|查询已完成))/giu;
+    const chinese = /(?:事件|领域事件|\bemits\b)\s*[：:]?\s*([^→\n。；]{0,40}(?:查询|详情|列表|轨迹|结果|页面)[^→\n。；]{0,20}(?:已查询|已返回|已展示|已读取|已生成|已形成|查询已完成))/giu;
     const english = /(?:事件|领域事件|\bemits\b)\s*[：:]?\s*([A-Za-z]*(?:Query|Trail|List|Result|View)[A-Za-z]*(?:Returned|Queried|Loaded|Displayed)\b)/giu;
-    return [...text.matchAll(chinese), ...text.matchAll(english)].map((match) => match[1].trim());
+    const queryChains = text.split(/\r?\n/u).flatMap((line) => {
+        if (!/(?:查询|读取|检索|获取|列表|\bquery\b|\bread\b)/iu.test(line) || !/(?:→|->)/u.test(line))
+            return [];
+        const segments = line.split(/(?:→|->)/u).map((item) => item.trim());
+        const queryIndex = segments.findIndex((item) => /(?:查询|读取|检索|获取|\bquery\b|\bread\b)/iu.test(item));
+        if (queryIndex < 0)
+            return [];
+        return segments.slice(queryIndex + 1).filter((segment) => {
+            if (/(?:读模型|read model|非领域事件)/iu.test(segment))
+                return false;
+            const declaredEvent = /(?:🟧|领域事件|\bevent\b|\bemits\b)/iu.test(segment);
+            const resultDisguisedAsFact = /(?:轨迹|列表|详情|结果|页面|视图|报告|数据)[^。；]{0,20}(?:已生成|已形成|已返回|已查询|已读取|已加载|已展示)/u.test(segment);
+            return declaredEvent || resultDisguisedAsFact;
+        }).map((segment) => segment
+            .replace(/^(?:🟧\s*|领域事件\s*[：:]?\s*|事件\s*[：:]?\s*)/iu, "")
+            .replace(/\([^)]*\)\s*$/u, "")
+            .replace(/[。；;]+$/u, "")
+            .trim());
+    });
+    const standaloneEnglish = [...text.matchAll(/\b[A-Za-z]*(?:Query|Trail|List|Result|View)[A-Za-z]*(?:Returned|Queried|Loaded|Displayed)\b/gu)]
+        .map((match) => match[0]);
+    return [...new Set([
+            ...[...text.matchAll(chinese), ...text.matchAll(english)].map((match) => match[1].trim()),
+            ...queryChains,
+            ...standaloneEnglish,
+        ])];
+}
+function approvedSemanticContext(state) {
+    return [
+        state.originalRequest ?? "",
+        ...(state.checkpoints ?? []).filter((checkpoint) => checkpoint.status === "approved").flatMap((checkpoint) => [
+            checkpoint.summary,
+            checkpoint.review?.feedback ?? "",
+        ]),
+        ...(state.humanDecisions ?? []).flatMap((decision) => [
+            String(decision?.feedback ?? ""),
+            String(decision?.selectedCandidateId ?? ""),
+        ]),
+    ].join("\n");
 }
 async function compactArchitectureEvidence(root, scopeId) {
     if (!["context-tactical-design", "delivery-planning", "implementation"].includes(scopeId ?? ""))
@@ -561,27 +698,29 @@ export function validateStageSemantics(state, stage, input) {
     });
     if (stage.scopeContract?.id === "system-discovery") {
         const allowedEvidenceHeadings = new Set(["输入场景与现状事实", "证据与追踪"]);
-        const forbidden = ["MySQL", "Redis", "API", "queryById", "Controller", "Mapper", "DTO", "SQL", "事务内", "表结构", "接口路径"];
+        const forbidden = [
+            "MySQL", "Redis", "API", "GET /", "POST /", "PUT /", "DELETE /", "queryById", "Controller", "Mapper", "DTO", "SQL", "事务内", "表结构", "接口路径",
+            "持久化", "服务器时间", "时间戳精确", "横切关注点", "技术耦合", "UI交互", "植入逻辑",
+        ];
         for (const [heading, text] of entries) {
             if (allowedEvidenceHeadings.has(heading))
                 continue;
-            const hits = forbidden.filter((term) => hasAffirmativeOccurrence(text, term));
+            const hits = forbidden.filter((term) => hasStrategicTechnicalOccurrence(text, term));
             if (hits.length)
                 addFinding("STRATEGIC_EVENTSTORM_TECHNICAL_LEAK", heading, hits, "战略事件风暴只表达业务事件流、参与者、规则、异常和边界线索；技术证据只能放入证据章节");
         }
         const eventStorm = String(input.sections?.["战略事件风暴"] ?? "");
         const eventMarker = /(?:领域事件|事件\s*[：:]|[（(]\s*事件\s*[）)]|⚡|\bemits\b)/iu;
-        const pseudoQuery = /(?:查询|详情|列表|轨迹|结果|页面)[^。；\n]{0,16}(?:已查询|已返回|已展示|已读取|查询已完成)/u;
-        const queryPseudoEvents = eventStorm.split(/\r?\n/u).flatMap((line) => {
-            const declaredList = /(?:领域事件|事件)\s*[：:]/u.test(line);
-            return line.split(/[；;]/u)
-                .map((segment) => segment.trim())
-                .filter((segment) => pseudoQuery.test(segment)
-                && (declaredList || eventMarker.test(segment))
+        const pseudoQuery = /(?:查询|详情|列表|轨迹|结果|页面)[^。；\n]{0,20}(?:已查询|已返回|已展示|已读取|已生成|已形成|查询已完成)/u;
+        const declaredQueryResults = eventStorm.split(/\r?\n/u).flatMap((line) => {
+            const declaredList = /(?:领域事件|事件)\s*[：:]|⚡|[（(]\s*事件\s*[）)]/u.test(line);
+            return line.split(/[；;]/u).map((segment) => segment.trim()).filter((segment) => pseudoQuery.test(segment)
+                && (declaredList || eventMarker.test(segment) || /(?:→|->)/u.test(segment))
                 && !/(?:读模型|非领域事件)/u.test(segment));
         });
-        if (queryPseudoEvents.length)
-            addFinding("STRATEGIC_EVENT_NOT_STATE_CHANGE", "战略事件风暴", queryPseudoEvents, "查询、返回、展示或读取完成属于读模型结果，不是领域主体状态变化，不能列为过去时领域事件");
+        const pseudoEvents = [...new Set([...queryPseudoEvents(eventStorm), ...declaredQueryResults])];
+        if (pseudoEvents.length)
+            addFinding("STRATEGIC_EVENT_NOT_STATE_CHANGE", "战略事件风暴", pseudoEvents, "查询、返回、展示或读取完成属于读模型结果，不是领域主体状态变化，不能列为过去时领域事件");
         if (requiresScenarioClarification(state.originalRequest ?? "")) {
             const resolution = input.ambiguityResolution;
             const candidates = Array.isArray(resolution?.candidates) ? resolution.candidates : [];
@@ -589,9 +728,65 @@ export function validateStageSemantics(state, stage, input) {
             const labelsComplete = candidates.every((item) => String(item?.label ?? "").trim());
             const affected = Array.isArray(resolution?.affectedDecisions)
                 ? resolution.affectedDecisions.map((item) => String(item).trim()).filter(Boolean) : [];
-            if (resolution?.status !== "unresolved" || ids.size < 2 || !labelsComplete || affected.length === 0) {
-                addFinding("AMBIGUOUS_SCENARIO_PREMATURE_COMMITMENT", "战略事件风暴", ["status=unresolved", "至少两项有稳定 id/label 的候选", "affectedDecisions"], "原始请求只有能力名称，尚不足以唯一确定触发、结果与规则；请用 stageCard.ambiguityContract.submitField 结构化声明候选与受影响决策，再把候选事件流并列交给人选择");
+            const affectedText = affected.join("、");
+            const decisionDimensions = [
+                /(?:触发|入口|参与者|发起)/u,
+                /(?:业务结果|结果|输出|查询|可见|返回|完成条件)/u,
+            ];
+            const missingDimensions = decisionDimensions.filter((pattern) => !pattern.test(affectedText)).length;
+            if (resolution?.status !== "unresolved" || ids.size < 2 || ids.size > 3 || !labelsComplete || affected.length === 0 || affected.length > 4 || missingDimensions > 0) {
+                addFinding("AMBIGUOUS_SCENARIO_PREMATURE_COMMITMENT", "战略事件风暴", ["status=unresolved", "2 至 3 项有稳定 id/label 的候选", "1 至 4 项 affectedDecisions", "覆盖触发与用户可见结果"], "原始请求只有能力名称，尚不足以唯一确定核心触发与用户可见结果；请只提交少量完整候选，避免把邻接需求扩张为本轮决策");
             }
+            const confirmation = String(input.sections?.["本次请您确认"] ?? "");
+            const questionLabels = [...confirmation.matchAll(/(?:^|\n)\s*(?:\d+[.、]|[-*])?\s*(?:\*\*)?([^：:\n]{2,20})(?:\*\*)?\s*[：:]([^\n]*)/gu)]
+                .filter((match) => /[？?]|是否|需确认|待确认/u.test(`${match[1]}${match[2]}`))
+                .map((match) => match[1].replace(/^[#\s]+/gu, "").trim())
+                .filter((label) => !/(?:必须由人工决定|验收清单|未决问题|AI 推荐)/u.test(label));
+            const family = (value) => {
+                if (/(?:触发|入口|浏览|标记)/u.test(value))
+                    return "trigger";
+                if (/(?:重复|去重|幂等)/u.test(value))
+                    return "repeat";
+                if (/(?:保留|历史|周期|过期)/u.test(value))
+                    return "retention";
+                if (/(?:未登录|登录|权限|身份)/u.test(value))
+                    return "authorization";
+                if (/(?:结果|输出|查询|返回|可见)/u.test(value))
+                    return "outcome";
+                if (/(?:撤销|补偿|误签到|误记录)/u.test(value))
+                    return "compensation";
+                if (/(?:自然日|时区|日边界|时间边界)/u.test(value))
+                    return "time-boundary";
+                if (/(?:不存在|无效对象|无效店铺|无效ID)/iu.test(value))
+                    return "invalid-reference";
+                return value.replace(/行为|条件|规则|策略/gu, "");
+            };
+            const affectedFamilies = new Set(affected.map(family));
+            if (questionLabels.length > 4)
+                addFinding("AMBIGUITY_SCOPE_OVEREXPANDED", "本次请您确认", questionLabels.slice(4), "战略事件风暴只保留直接阻塞本轮业务语义的最多 4 个决策，其余邻接问题记录为未来候选而非本轮人工门禁");
+            const unregistered = [...new Set(questionLabels.filter((label) => !affectedFamilies.has(family(label))))];
+            if (unregistered.length)
+                addFinding("AMBIGUITY_DECISION_UNREGISTERED", "本次请您确认", unregistered, "人工待确认项必须全部登记在 ambiguityResolution.affectedDecisions 中，禁止提问却让该决策以默认规则进入主流程");
+            const nonAdvisory = entries.filter(([heading]) => !["本次请您确认", "备选解释与建议", "证据与追踪"].includes(heading))
+                .map(([, value]) => value).join("\n");
+            const committedRuleText = nonAdvisory.split(/\r?\n/u)
+                .filter((line) => !/(?:未来候选|后续候选|待战术事件风暴|尚未决定|规则待定)/u.test(line)).join("\n");
+            const unapprovedRuleFamilies = BUSINESS_RULE_FAMILIES
+                .filter((rule) => !affectedFamilies.has(rule.family) && rule.pattern.test(committedRuleText));
+            if (unapprovedRuleFamilies.length)
+                addFinding("AMBIGUITY_RULE_PRECOMMITTED", "战略事件风暴", unapprovedRuleFamilies.map((rule) => rule.label), "模糊需求下不得顺手确定未获授权的异常、去重、时间或补偿规则；将其明确标为待战术事件风暴澄清，或作为高影响决策交给人工选择");
+            const unresolvedConflicts = [];
+            if (questionLabels.some((label) => family(label) === "authorization")
+                && /(?:仅|只)(?:登录|已登录)用户|未登录[^。；\n]{0,20}(?:忽略|拒绝|记录)/u.test(nonAdvisory))
+                unresolvedConflicts.push("登录/权限规则");
+            if (questionLabels.some((label) => family(label) === "repeat")
+                && /(?:重复|同一店铺)[^。；\n]{0,30}(?:必须|仅|只)(?:保留|记录|去重)/u.test(nonAdvisory))
+                unresolvedConflicts.push("重复/去重规则");
+            if (questionLabels.some((label) => family(label) === "retention")
+                && /(?:轨迹|数据)[^。；\n]{0,30}(?:仅保留|永久保留|保留\d+)/u.test(nonAdvisory))
+                unresolvedConflicts.push("保留周期");
+            if (unresolvedConflicts.length)
+                addFinding("AMBIGUITY_UNRESOLVED_DECISION_COMMITTED", "战略事件风暴", unresolvedConflicts, "仍在等待人工确认的决策不能同时作为共享规则、唯一事件流或已确认约束出现");
         }
     }
     if (stage.scopeContract?.id === "system-strategy") {
@@ -602,6 +797,14 @@ export function validateStageSemantics(state, stage, input) {
             const hits = forbidden.filter((term) => hasAffirmativeOccurrence(text, term));
             if (hits.length)
                 addFinding("STRATEGIC_DESIGN_TACTICAL_LEAK", heading, hits, "战略设计只能决定子域、限界上下文、职责、协作和实现单元用例，禁止提前完成战术设计");
+        }
+        if (stage.id === "04-service-use-cases") {
+            const deferred = new Set((state.humanDecisions ?? []).flatMap((decision) => decision.deferredToTacticalFamilies ?? []));
+            const assertedText = entries.map(([, value]) => value).join("\n").split(/\r?\n/u)
+                .filter((line) => !/(?:待战术事件风暴|未来候选|尚未决定|待确认)/u.test(line)).join("\n");
+            const promoted = BUSINESS_RULE_FAMILIES.filter((rule) => deferred.has(rule.family) && rule.pattern.test(assertedText));
+            if (promoted.length)
+                addFinding("STRATEGIC_USE_CASE_DEFERRED_RULE_PROMOTED", "实现单元用例包", promoted.map((rule) => rule.label), "里程碑 I 已明确把这些规则交给战术事件风暴，本阶段只能把它们列为待战术澄清项，不能提前写成用例前置条件、失败语义或验收结果");
         }
     }
     if (stage.scopeContract?.id === "context-discovery") {
@@ -620,7 +823,8 @@ export function validateStageSemantics(state, stage, input) {
     if (stage.scopeContract?.id === "context-tactical-design" && stage.id === "06-tactical-design") {
         const designText = entries.map(([, text]) => text).join("\n");
         const domainText = String(input.sections?.["领域模型设计"] ?? "");
-        const automaticCapture = /(?:每次|当).{0,30}成功.{0,30}(?:记录|保存)|成功.{0,20}(?:时|后).{0,20}(?:记录|保存)/u.test(state.originalRequest ?? "");
+        const approvedContext = approvedSemanticContext(state);
+        const automaticCapture = /(?:每次|当).{0,30}成功.{0,30}(?:记录|保存)|成功.{0,20}(?:时|后).{0,20}(?:记录|保存)|(?:详情页|既有业务路径)[^。；\n]{0,40}(?:访问|成功)?[^。；\n]{0,20}触发/u.test(approvedContext);
         const explicitCaptureEndpoint = /POST\s+\/[\w{}\-/?=]*(?:view|record|track|trail|history)/iu.test(designText);
         const existingSuccessHook = /(?:成功路径|成功返回|查询成功|详情成功).{0,50}(?:调用|触发|记录)/u.test(designText);
         if (automaticCapture && explicitCaptureEndpoint && existingSuccessHook) {
@@ -680,12 +884,46 @@ function hasAffirmativeOccurrence(text, term) {
         const sentenceEnd = ends.length ? Math.min(...ends) : text.length;
         const headingStart = Math.max(text.lastIndexOf("\n###", offset), text.lastIndexOf("\n##", offset));
         const sentence = text.slice(headingStart >= 0 ? headingStart : sentenceStart, sentenceEnd);
-        const excluded = /(?:不|禁止|不得|不得提前|排除|范围外|非目标|暂不|无需|不做|推迟|留待|待后续|归(?:战术|后续)[^。；\n]{0,8}设计|未授权|未(?:设计|指定|决定|引入|新增|包含)|没有|不恢复|未来候选|后续候选|不纳入|不触碰)/u.test(sentence);
+        const prefix = text.slice(Math.max(0, offset - 500), offset);
+        const categoryPattern = /(?:#{1,6}\s*|\*\*)?(非目标|范围外|未来候选|后续候选|不纳入本次|本次目标|主流程|验收结果|现状已存在)(?:\*\*)?\s*[：:]?/gu;
+        const categories = [...prefix.matchAll(categoryPattern)];
+        const nearestCategory = categories.at(-1)?.[1] ?? "";
+        const excludedCategory = /^(?:非目标|范围外|未来候选|后续候选|不纳入本次)$/u.test(nearestCategory);
+        const excluded = excludedCategory || /(?:不|禁止|不得|不得提前|排除|范围外|非目标|暂不|无需|不做|推迟|留待|待后续|归(?:战术|后续)[^。；\n]{0,8}设计|未授权|未(?:设计|指定|决定|引入|新增|包含)|没有|不恢复|未来候选|后续候选|不纳入|不触碰)/u.test(sentence);
         if (!excluded)
             return true;
         offset = text.indexOf(term, offset + term.length);
     }
     return false;
+}
+function hasStrategicTechnicalOccurrence(text, term) {
+    let offset = text.indexOf(term);
+    while (offset >= 0) {
+        const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+        const lineEndCandidate = text.indexOf("\n", offset);
+        const lineEnd = lineEndCandidate >= 0 ? lineEndCandidate : text.length;
+        const line = text.slice(lineStart, lineEnd);
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+        const negatedBefore = new RegExp(`(?:不|禁止|不得|无需|未|没有|排除)[^。；]{0,18}${escaped}`, "iu").test(line);
+        const negatedAfter = new RegExp(`${escaped}[^。；]{0,18}(?:不在本阶段|不属于本阶段|留待后续|尚未决定)`, "iu").test(line);
+        if (!negatedBefore && !negatedAfter)
+            return true;
+        offset = text.indexOf(term, offset + term.length);
+    }
+    return false;
+}
+const BUSINESS_RULE_FAMILIES = [
+    { family: "authorization", label: "权限/未登录处理", pattern: /未登录[^。；\n]{0,30}(?:拒绝|忽略|记录|允许|提示)|仅(?:登录|已登录)用户/u },
+    { family: "repeat", label: "重复/去重规则", pattern: /(?:重复|同日同店|同一店铺)[^。；\n]{0,40}(?:幂等|去重|仅记录|保留首次|允许多次)/u },
+    { family: "retention", label: "保留周期", pattern: /(?:轨迹|记录|数据)[^。；\n]{0,30}(?:永久保留|仅保留|保留\d+|TTL|自动过期)/iu },
+    { family: "compensation", label: "撤销/补偿规则", pattern: /(?:误签到|误记录|补偿|撤销)[^。；\n]{0,35}(?:支持|不支持|申请|允许|删除|恢复)/u },
+    { family: "time-boundary", label: "自然日边界", pattern: /(?:自然日|一日)[^。；\n]{0,35}(?:00:00|23:59|系统时区|用户时区|服务器时间)/u },
+    { family: "invalid-reference", label: "对象不存在处理", pattern: /(?:店铺|用户|对象|ID)[^。；\n]{0,25}(?:不存在|无效)[^。；\n]{0,20}(?:拒绝|报错|提示|忽略)/u },
+];
+function deferredRuleFamilies(document) {
+    const deferredText = document.split(/\r?\n/u)
+        .filter((line) => /(?:待战术事件风暴|未来候选|后续阶段定义)/u.test(line)).join("\n");
+    return BUSINESS_RULE_FAMILIES.filter((rule) => rule.pattern.test(deferredText)).map((rule) => rule.family);
 }
 export async function review(input) {
     if (!["approve", "revise", "reject"].includes(input.decision)) {
@@ -721,6 +959,26 @@ export async function review(input) {
             throw new WorkflowError(`正式里程碑文档未通过阶段语义复核，禁止人工批准：${semanticBlockers.map((finding) => finding.message).join("；")}`);
         if (checkpoint.document === "milestoneIV")
             await writeApprovedModelContract(root, String(document));
+        const ambiguity = checkpoint.ambiguityResolution;
+        if (ambiguity?.status === "unresolved" && Array.isArray(ambiguity.candidates) && ambiguity.candidates.length) {
+            const feedback = input.feedback ?? "";
+            const selected = ambiguity.candidates.find((candidate) => candidate.id === input.resolution?.selectedCandidateId)
+                ?? ambiguity.candidates.find((candidate) => feedback.includes(String(candidate.id)) || feedback.includes(String(candidate.label)));
+            if (!selected)
+                throw new WorkflowError(`本里程碑存在未决候选，批准时必须提供 resolution.selectedCandidateId；可选：${ambiguity.candidates.map((candidate) => `${candidate.id}（${candidate.label}）`).join("、")}`);
+            checkpoint.ambiguityResolution = {
+                ...ambiguity, status: "resolved", selectedCandidateId: selected.id,
+                resolvedDecisions: input.resolution?.resolvedDecisions ?? ambiguity.affectedDecisions ?? [],
+                resolvedAt: now(), resolvedBy: input.reviewer,
+            };
+            state.humanDecisions ??= [];
+            state.humanDecisions.push({
+                milestone: checkpoint.milestone, stage: checkpoint.stage, selectedCandidateId: selected.id,
+                resolvedDecisions: input.resolution?.resolvedDecisions ?? ambiguity.affectedDecisions ?? [],
+                deferredToTacticalFamilies: deferredRuleFamilies(document),
+                reviewer: input.reviewer, decidedAt: now(),
+            });
+        }
     }
     checkpoint.review = record;
     if (input.decision === "approve") {
@@ -729,6 +987,8 @@ export async function review(input) {
             const { execFile } = await import("node:child_process");
             const head = await new Promise((resolve, reject) => execFile("git", ["rev-parse", "HEAD"], { cwd: state.projectRoot, windowsHide: true }, (error, stdout) => error ? reject(new WorkflowError("里程碑 V 批准前必须存在可读取的 Git 基线。")) : resolve(stdout.trim())));
             state.implementationBaseline = { head, capturedAt: now() };
+            if (state.deliveryPlan)
+                state.deliveryPlan.approvedAt = now();
         }
         if (stage.openspecArchiveGate)
             state.status = "awaiting_archive";

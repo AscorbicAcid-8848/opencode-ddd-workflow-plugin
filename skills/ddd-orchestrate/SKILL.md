@@ -7,6 +7,8 @@ description: "Route one DDD request into feature delivery, legacy refactoring, o
 
 Use only `ddd_lifecycle` for workflow state. Follow its `transition`; never infer state from files. Do not narrate between calls.
 
+Every `input` value is a native tool object. Never JSON-stringify `input`, `sections`, `observations`, or `resolution`; double encoding is a protocol error.
+
 ## Route and initialize
 
 Choose exactly one:
@@ -49,22 +51,22 @@ Use no repository/shell exploration in this stage. Copy `excerpt.ref` exactly in
 {"action":"complete-stage","input":{"stage":"<stageId>","summary":"至少20字的阶段结论","sections":{"<allowed heading>":"完整正文"},"observations":[{"heading":"<heading>","kind":"<allowed kind>","statement":"正文中的原句","evidence_refs":["code:relative/path#L1-L3"]}]}}
 ```
 
-`observations` is required only when the stage card requests current-system claims. Its `heading` is an exact key from `allowedSectionHeadings`, never a nested `###` subtitle. Facts need cited evidence; unknowns do not invent evidence. For implementation include `sliceId`; for delivery-plan include `plannedSlices`. Retry the complete payload only for blocking findings.
+`observations` is required only when the stage card requests current-system claims. Its `heading` is an exact key from `allowedSectionHeadings`, never a nested `###` subtitle. Facts need cited evidence; unknowns do not invent evidence. For implementation include `sliceId`; for delivery-plan include `plannedSlices`. Submit the complete payload once. When a blocking result contains `draft.saved=true`, repair only the sections named by `findings.path`; the runtime retains all other valid content. Stop instead of retrying when `draft.retryableByModel=false`.
 
-Before completing the delivery-plan stage, call `openspec-plan` once:
+Before completing the delivery-plan stage, call `openspec-plan` once with business fields, not Markdown:
 
 ```json
-{"action":"openspec-plan","input":{"proposal":"...","specs":[{"capability":"kebab-case","content":"delta spec with scenarios"}],"design":"...","tasks":"- [ ] 1.1 vertical slice"}}
+{"action":"openspec-plan","plan":{"title":"...","objective":"...","nonGoals":[],"designDecisions":[],"capabilities":[{"id":"kebab-case","requirements":[{"name":"...","rule":"...","scenarios":[{"name":"...","given":"...","when":"...","then":"..."}]}]}],"slices":[{"id":"S1","title":"...","outcome":"...","consumer":"...","dependsOn":[],"acceptanceCriteria":["..."],"modelElementIds":["ME-01"],"invariantIds":["INV-01"],"productionPaths":["..."],"testPaths":["..."],"verification":["..."],"compatibility":"...","rollback":"..."}]}}
 ```
 
-Only behavior-preserving refactoring may use `skipSpecs:true`.
+The runtime compiles proposal, Delta Specs, design, tasks, `plan.json`, and `roadmap.json`. `plan` is a top-level tool argument, never a JSON string in `input`. If it returns findings, resend only affected entries as top-level `plan` with `mode=repair`; the server draft preserves everything else. Do not call `section` or `finalize`. After `status=ready`, call only `complete-stage` with an empty input. The runtime deterministically compiles milestone V from the validated plan and approved model contract and sets `plannedSlices`; never resend or rewrite milestone-V sections. Only behavior-preserving refactoring may use `skipSpecs:true`.
 
 ## Human gate and completion
 
 When `requiredAction` is `await-human-review`, output `transition.message` verbatim and stop. On the next user turn record the decision:
 
 ```json
-{"action":"review","input":{"decision":"approve|revise|reject","reviewer":"<name>","feedback":"<optional>"}}
+{"action":"review","input":{"decision":"approve|revise|reject","reviewer":"<name>","feedback":"<optional>","resolution":{"selectedCandidateId":"<required when unresolved candidates exist>"}}}
 ```
 
 The plugin binds review to the current unique human gate; do not guess an internal stage ID and do not call status first. Follow the returned transition. After milestone VI approval, call `{"action":"archive"}`; success requires strict OpenSpec validation.
@@ -81,5 +83,6 @@ If real build, test, E2E, database, cache, Git, or runtime evidence is unavailab
 - Big Picture does not decide API, aggregate, table, or middleware. Tactical design owns application services, aggregates, domain interactions, and persistence.
 - Roman I–VI are human labels; tool calls use exact stage IDs.
 - One stage transaction is one `prepare`, optional required packet/planning call, then one `complete-stage`.
+- A Coding `sliceId` must exist in the approved roadmap and all its dependencies must already be complete.
 - Never hand-edit formal milestone/OpenSpec artifacts or workflow state.
 - During implementation do not spawn subagents or download build infrastructure; honor runtime repository and command budgets.

@@ -1,14 +1,16 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { readdir, rm } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import { tool } from "@opencode-ai/plugin";
 import { initialize, prepare, submit, review, status, block, archive, openspec, containsRequiredConcept } from "./engine.js";
-import { loadState } from "./state.js";
-import { statePath } from "./state.js";
-import { exists, readJson } from "./fs.js";
+import { profileFor } from "./catalog.js";
+import { loadState, saveState } from "./state.js";
+import { workflowRoot, statePath } from "./state.js";
+import { exists, readJson, writeJson } from "./fs.js";
 import { evidenceBundle } from "./evidence.js";
+import { compileDeliveryMilestoneSections, compileStructuredPlan, normalizeStructuredPlan, validateStructuredPlan } from "./delivery-plan.js";
 const workflowType = tool.schema.enum(["add-feature", "refactor-system", "create-system"]);
-const lifecycleAction = tool.schema.enum(["init", "prepare", "evidence-bundle", "complete-stage", "section", "finalize", "submit", "review", "status", "block", "archive", "openspec", "openspec-plan"]);
+const lifecycleAction = tool.schema.enum(["init", "prepare", "evidence-bundle", "complete-stage", "review", "status", "block", "archive", "openspec", "openspec-plan"]);
 const reqText = () => tool.schema.string().min(1);
 function projectRoot(args, ctx) {
     return path.resolve(args.project_root || ctx.worktree || ctx.directory || process.cwd());
@@ -42,6 +44,39 @@ function identity(args, ctx) {
     return { workflowType: args.workflow_type, workflowId: args.workflow_id, projectRoot: projectRoot(args, ctx) };
 }
 const sessionIdentities = new Map();
+async function bindRuntimeSession(identity, sessionID) {
+    if (!sessionID)
+        return;
+    const root = path.join(identity.projectRoot, "openspec", "changes", identity.workflowId, "ddd");
+    if (!await exists(statePath(root)))
+        return;
+    const state = await loadState(root);
+    if (state.runtimeSessionId === sessionID)
+        return;
+    state.runtimeSessionId = sessionID;
+    await saveState(root, state);
+}
+async function persistedStageForSession(projectRoot, sessionID) {
+    const changesDir = path.join(projectRoot, "openspec", "changes");
+    if (!await exists(changesDir))
+        return undefined;
+    for (const entry of await readdir(changesDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === "archive")
+            continue;
+        const root = path.join(changesDir, entry.name, "ddd");
+        if (!await exists(statePath(root)))
+            continue;
+        try {
+            const state = await loadState(root);
+            if (state.runtimeSessionId === sessionID && !["complete", "rejected"].includes(state.status))
+                return state.currentStage;
+        }
+        catch {
+            // A malformed unrelated change must not break tool dispatch.
+        }
+    }
+    return undefined;
+}
 async function resolveActiveIdentity(ctx, workflowType, workflowId) {
     const root = path.resolve(ctx.worktree || ctx.directory || process.cwd());
     if (workflowType && workflowId) {
@@ -108,6 +143,59 @@ function enrichRoadmapSections(sections) {
         sections["Git 交付计划"] = `Git 基线与回滚策略：${git.trim()}`;
     }
 }
+function endpointContracts(text) {
+    const result = new Set();
+    for (const match of text.matchAll(/\b(GET|POST|PUT|PATCH|DELETE)\s+(\/[A-Za-z0-9_{}\-/.?=&$()]+)/giu)) {
+        const route = match[2].split("?")[0].replace(/\/$/u, "") || "/";
+        result.add(`${match[1].toUpperCase()} ${route}`);
+    }
+    return result;
+}
+async function validatePlanAgainstApprovedDesign(projectRoot, root, profile, state, plan) {
+    const findings = [];
+    const tacticalStages = new Set(profile.stages.filter((stage) => stage.scopeContract?.id === "context-tactical-design").map((stage) => stage.id));
+    const tacticalCheckpoint = [...state.checkpoints].reverse().find((checkpoint) => tacticalStages.has(checkpoint.stage) && ["completed", "approved"].includes(checkpoint.status));
+    let approvedText = "";
+    if (tacticalCheckpoint) {
+        const fileName = profile.documents[tacticalCheckpoint.document];
+        const file = fileName ? path.join(root, fileName) : "";
+        if (file && await exists(file))
+            approvedText = await readFile(file, "utf8");
+    }
+    const planText = JSON.stringify(plan);
+    const approvedEndpoints = endpointContracts(approvedText);
+    for (const endpoint of endpointContracts(planText)) {
+        if (!approvedEndpoints.has(endpoint))
+            findings.push({
+                code: "PLAN_UNAPPROVED_INTERFACE",
+                path: "plan.slices",
+                message: `交付计划引入了战术设计未批准的接口 ${endpoint}；路线图只能映射里程碑 IV 已批准契约。`,
+            });
+    }
+    const repositoryEvidenceParts = [approvedText];
+    for (const file of ["pom.xml", "build.gradle", "build.gradle.kts", "package.json", "docker-compose.yml", "compose.yml"]) {
+        const candidate = path.join(projectRoot, file);
+        if (await exists(candidate))
+            repositoryEvidenceParts.push(await readFile(candidate, "utf8"));
+    }
+    const repositoryEvidence = repositoryEvidenceParts.join("\n");
+    const infrastructureChecks = [
+        [/\bflyway\b/iu, /\bflyway\b/iu, "Flyway"],
+        [/\bliquibase\b/iu, /\bliquibase\b/iu, "Liquibase"],
+        [/\bdocker(?:-compose|\s+compose)\b/iu, /\bdocker(?:-compose|\s+compose)\b/iu, "Docker Compose"],
+        [/\bkafka(?:-topics|-console)?\b/iu, /\bkafka\b/iu, "Kafka 工具链"],
+        [/\bredis-cli\b/iu, /\bredis(?:-cli)?\b/iu, "redis-cli"],
+    ];
+    for (const [used, evidenced, label] of infrastructureChecks) {
+        if (used.test(planText) && !evidenced.test(repositoryEvidence))
+            findings.push({
+                code: "PLAN_UNEVIDENCED_INFRASTRUCTURE",
+                path: "plan.slices[].verification",
+                message: `交付计划使用了 ${label}，但批准战术设计和仓库构建配置均无该工具证据；请改用现有工程能力或列为人工阻塞。`,
+            });
+    }
+    return findings;
+}
 function normalizeAtomicSections(raw) {
     return Object.fromEntries(Object.entries(raw).map(([heading, value]) => {
         const escaped = heading.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -122,8 +210,8 @@ const DDD_AGENT_ID = "ddd-workflow";
 const DDD_CODE_AGENT_ID = "ddd-coding";
 const DDD_COMMAND_TEMPLATE = [
     "Load `ddd-orchestrate` and treat the text below as the immutable original request.",
-    "Use only `ddd_lifecycle`. For an existing-system evidence stage call action=evidence-bundle once after prepare with 2-6 likely source identifiers; prefer short symbols such as Shop/User/Controller over invented compound class names. Do not use repository or shell exploration. For every stage call action=complete-stage once with every allowed heading. Continue until human review, a real block, archive, or completion.",
-    "complete-stage owns claim bookkeeping and atomic publication. Correct and retry the whole stage only when it returns blocking findings; never split a normal stage into per-heading calls.",
+    "Use only `ddd_lifecycle`. Every input/sections/observations value must be a native object or array, never a JSON string. For an existing-system evidence stage call action=evidence-bundle once after prepare with 2-6 likely source identifiers; prefer short symbols such as Shop/User/Controller over invented compound class names. Do not use repository or shell exploration. For every stage call action=complete-stage once with every allowed heading. Continue until human review, a real block, archive, or completion.",
+    "complete-stage owns claim bookkeeping and atomic publication. Submit the full stage once. If it returns draft.saved=true, repair only findings.path sections; never resend unchanged sections. If draft.retryableByModel=false, stop and report the block. At milestone V submit one structured openspec-plan, then call complete-stage with empty input; the runtime compiles all OpenSpec and milestone-V Markdown.",
     "Keep total section text between qualityContract.minTotalChars and targetMaxTotalChars. Omit observations when stageCard has no claimContract. Do not narrate plans between tool calls. Treat the evidence bundle as complete; record anything outside it as evidence-gap/open-question. At a human gate output transition.message and stop.",
     "",
     "$ARGUMENTS",
@@ -134,14 +222,14 @@ const disabledDddAgentTools = {
     skill: true,
     pdf_parse: false, excel_parse: false, excel_write: false,
     subagent: false, workflow_run: false, todowrite: false,
-    webfetch: false, websearch: false, codesearch: false,
+    webfetch: false, websearch: false, codesearch: false, skill_run_script: false,
     CronCreate: false, CronList: false, CronDelete: false,
     question: false, plan_enter: false, plan_exit: false, lsp: false,
 };
 const modelingOnlyTools = {
     ...disabledDddAgentTools,
     read: false, glob: false, grep: false, bash: false, shell: false,
-    edit: false, write: false, apply_patch: false, patch: false, multiedit: false,
+    edit: false, write: false, apply_patch: false, patch: false, multiedit: false, multi_edit: false,
 };
 const DDD_CODE_COMMAND_TEMPLATE = [
     "Load `ddd-implementation`. This command is only for approving milestone V, implementing approved vertical slices, and producing milestone VI evidence.",
@@ -152,16 +240,18 @@ const DDD_CODE_COMMAND_TEMPLATE = [
     "$ARGUMENTS",
 ].join("\n");
 const lifecycleTool = tool({
-    description: "DDD 工作流生命周期控制器。常规路径：init → prepare → 现状阶段 evidence-bundle → complete-stage → review；里程碑 V 用 openspec-plan；最终 archive。",
+    description: "DDD 工作流生命周期控制器。init→prepare→现状 evidence-bundle→complete-stage→review；里程碑 V 只提交结构化 openspec-plan，由运行时编译 OpenSpec 和路线图；Coding 按批准 sliceId 推进；最终 archive。",
     args: {
         action: lifecycleAction,
         workflow_type: workflowType.optional().describe("init 必填；其余当项目仅有一个活动 change 时可省略。"),
         workflow_id: reqText().optional().describe("init 必填；其余当项目仅有一个活动 change 时可省略。"),
         project_root: tool.schema.string().optional().describe("项目根目录，默认取会话 worktree。"),
-        input: tool.schema.union([
-            tool.schema.record(tool.schema.string(), tool.schema.any()),
-            tool.schema.string(),
-        ]).optional().describe("载荷对象；兼容模型误把完整 JSON 对象编码成字符串。init:{title,request}; prepare:{stage}; evidence-bundle:{stage,terms:[2-6项]}; complete-stage:{stage,summary,sections,observations?,ambiguityResolution?,plannedSlices?,sliceId?}; review；openspec-plan；status/block/archive/openspec。"),
+        input: tool.schema.record(tool.schema.string(), tool.schema.any()).optional()
+            .describe("init/prepare/evidence-bundle/complete-stage/review 的原生对象载荷。必须直接传对象，禁止把 JSON 再编码成字符串。"),
+        plan: tool.schema.record(tool.schema.string(), tool.schema.any()).optional()
+            .describe("仅 openspec-plan 使用的顶层计划对象：title/objective/nonGoals/designDecisions/capabilities/slices。直接传对象，禁止 JSON 字符串。"),
+        mode: tool.schema.enum(["replace", "repair"]).optional().describe("openspec-plan 模式；首次 replace，修复 findings 时 repair。"),
+        skip_specs: tool.schema.boolean().optional().describe("仅行为保持型重构的 openspec-plan 可设 true。"),
     },
     async execute(args, context) {
         try {
@@ -184,13 +274,16 @@ const lifecycleTool = tool({
                 }
                 const root = projectRoot(args, ctx);
                 const result = await initialize({ workflowType: args.workflow_type, workflowId: args.workflow_id, projectRoot: root, title: i.title, request: i.request });
-                sessionIdentities.set(context.sessionID, { workflowType: args.workflow_type, workflowId: args.workflow_id, projectRoot: root });
+                const identity = { workflowType: args.workflow_type, workflowId: args.workflow_id, projectRoot: root };
+                sessionIdentities.set(context.sessionID, identity);
+                await bindRuntimeSession(identity, context.sessionID);
                 return out(result);
             }
             const id = await resolveActiveIdentity(ctx, args.workflow_type, args.workflow_id);
+            await bindRuntimeSession(id, context.sessionID);
             if (args.action === "prepare") {
                 const i = payload ?? {};
-                const requestedStage = typeof i.stage === "string" && /^(?:0[0-9]|10)-[a-z0-9-]+$/u.test(i.stage) ? i.stage : undefined;
+                const requestedStage = typeof i.stage === "string" && /^(?:0[0-9]|1[0-2])-[a-z0-9-]+$/u.test(i.stage) ? i.stage : undefined;
                 const transition = requestedStage ? null : await status(id);
                 const stage = requestedStage ?? transition?.nextStage;
                 if (!stage)
@@ -199,25 +292,42 @@ const lifecycleTool = tool({
             }
             if (args.action === "evidence-bundle") {
                 const i = payload;
-                if (i?.stage !== "01-current-evidence")
-                    return out({ error: "evidence-bundle 仅属于 01-current-evidence。" });
-                return out(await evidenceBundle(id.projectRoot, id.workflowId, i.terms));
-            }
-            if (args.action === "submit") {
-                return out({ error: "MODEL_FACING_SUBMIT_DISABLED：请用 action=complete-stage 一次提交完整阶段。不要构造 raw claims。" });
+                if (!baselineStages.has(String(i?.stage ?? "")))
+                    return out({ error: "evidence-bundle 仅属于已有系统基线阶段（01-current-evidence 或 01-baseline-evidence）。" });
+                return out(await evidenceBundle(id.projectRoot, id.workflowId, i?.terms));
             }
             if (args.action === "complete-stage") {
-                const i = payload;
-                if (!i?.summary || !i?.sections || typeof i.sections !== "object" || Array.isArray(i.sections)) {
-                    return out({ error: "complete-stage 需要 input.{summary,sections}；stage 可省略并解析当前唯一阶段，sections 必须覆盖 stageCard.allowedSectionHeadings。" });
-                }
-                const requestedStage = typeof i.stage === "string" && /^(?:0[0-9]|10)-[a-z0-9-]+$/u.test(i.stage) ? i.stage : undefined;
+                const i = payload ?? {};
+                const requestedStage = typeof i.stage === "string" && /^(?:0[0-9]|1[0-2])-[a-z0-9-]+$/u.test(i.stage) ? i.stage : undefined;
                 const transition = requestedStage ? null : await status(id);
                 const stage = requestedStage ?? transition?.nextStage;
                 if (!stage)
                     return out({ error: `complete-stage 无法解析唯一阶段；当前候选为：${transition?.allowedNextStages.join("、") || "无"}。` });
-                const sections = normalizeAtomicSections(i.sections);
-                if (stage === "08-roadmap")
+                const workflowProfile = await profileFor(id.workflowType);
+                const stageContract = workflowProfile.stages.find((item) => item.id === stage);
+                let summary = String(i.summary ?? "").trim();
+                let rawSections = i.sections;
+                if (stageContract?.deliveryAssetGate) {
+                    const root = await workflowRoot(id.projectRoot, workflowProfile.artifactBase, workflowProfile.artifactSubdir, id.workflowId);
+                    const state = await loadState(root);
+                    const planFile = path.join(root, ".ddd", "delivery", "plan.json");
+                    if (!state.deliveryPlan || !await exists(planFile))
+                        return out({
+                            error: "交付规划阶段必须先成功调用一次 openspec-plan；运行时随后会自动编译里程碑 V，无需模型再次手写全文。",
+                        });
+                    const plan = await readJson(planFile);
+                    const contractFile = path.join(root, "model-contract.json");
+                    const contract = await exists(contractFile) ? await readJson(contractFile) : {};
+                    const compiledMilestone = compileDeliveryMilestoneSections(plan, id.workflowId, contract);
+                    summary = compiledMilestone.summary;
+                    rawSections = compiledMilestone.sections;
+                    i.plannedSlices = state.deliveryPlan.sliceIds.length;
+                }
+                else if ((!summary && !rawSections) || (rawSections !== undefined && (typeof rawSections !== "object" || Array.isArray(rawSections)))) {
+                    return out({ error: "首次 complete-stage 需要 input.{summary,sections}。若上次返回 draft.saved=true，可只提交 findings.path 涉及的 sections；运行时会合并候选稿。" });
+                }
+                const sections = normalizeAtomicSections(rawSections ?? {});
+                if (stageContract?.deliveryAssetGate)
                     enrichRoadmapSections(sections);
                 const observations = (Array.isArray(i.observations) ? i.observations : []).map((item) => {
                     const heading = String(item?.heading ?? "").trim();
@@ -250,28 +360,10 @@ const lifecycleTool = tool({
                     sections[heading] = `${sections[heading].trim()}\n\n### 结构化结论\n${statements.map((statement) => `- ${statement}`).join("\n")}`;
                 }
                 const metadata = lifecycleFinalizeMetadata(i);
-                return out(await submit({ ...id, stage, summary: i.summary, sections,
+                return out(await submit({ ...id, stage, summary, sections,
                     claims: observations.map((item) => claimFromObservation(stage, String(item?.heading ?? ""), item)),
                     ambiguityResolution: i.ambiguityResolution,
                     finalize: true, ...metadata }));
-            }
-            if (args.action === "section") {
-                const i = payload;
-                if (!i?.stage || !i?.heading || !i?.summary || !i?.content)
-                    return out({ error: "section 需要 input.{stage,heading,summary,content}。" });
-                const observations = Array.isArray(i.observations) ? i.observations : [];
-                const missing = observations.map((item) => String(item?.statement ?? "").trim()).filter((statement) => statement && !String(i.content).includes(statement));
-                const content = missing.length ? `${String(i.content).trim()}\n\n### 结构化结论\n${missing.map((item) => `- ${item}`).join("\n")}` : String(i.content);
-                return out(await submit({ ...id, stage: i.stage, summary: i.summary, sections: { [i.heading]: content },
-                    claims: observations.map((item) => claimFromObservation(i.stage, i.heading, item)), finalize: false }));
-            }
-            if (args.action === "finalize") {
-                const i = payload;
-                if (!i?.stage || !i?.summary)
-                    return out({ error: "finalize 需要 input.{stage,summary}。" });
-                const metadata = lifecycleFinalizeMetadata(i);
-                return out(await submit({ ...id, stage: i.stage, summary: i.summary, sections: {}, finalize: true,
-                    ...metadata }));
             }
             if (args.action === "review") {
                 const transition = await status(id);
@@ -285,7 +377,8 @@ const lifecycleTool = tool({
                 const stage = transition.nextHumanGate ?? i.stage;
                 if (!stage)
                     return out({ error: "当前没有待人工验收的里程碑，不能执行 review。" });
-                return out(await review({ ...id, stage, decision, reviewer: i.reviewer, feedback: i.feedback }));
+                return out(await review({ ...id, stage, decision, reviewer: i.reviewer, feedback: i.feedback,
+                    resolution: i.resolution ?? (i.selectedCandidateId ? { selectedCandidateId: i.selectedCandidateId } : undefined) }));
             }
             if (args.action === "status") {
                 const i = payload ?? {};
@@ -307,14 +400,69 @@ const lifecycleTool = tool({
                     content: i.content, capability: i.capability, skipSpecs: i.skipSpecs }));
             }
             if (args.action === "openspec-plan") {
-                const i = payload;
-                if (!i?.proposal || !i?.design || !i?.tasks) {
-                    return out({ error: "openspec-plan 需要 input.{proposal,design,tasks}，新增/新建还需 specs:[{capability,content}]。" });
+                const i = { ...(payload ?? {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.mode ? { mode: args.mode } : {}),
+                    ...(args.skip_specs !== undefined ? { skipSpecs: args.skip_specs } : {}) };
+                const planningTransition = await status(id);
+                const planningStageId = planningTransition.nextStage ?? planningTransition.allowedNextStages[0];
+                const workflowProfile = await profileFor(id.workflowType);
+                const planningStage = workflowProfile.stages.find((stage) => stage.id === planningStageId);
+                if (!planningStage?.deliveryAssetGate)
+                    return out({
+                        error: `openspec-plan 只允许在交付规划阶段调用；当前阶段为 ${planningStageId ?? "无"}。`,
+                        retryableByModel: false,
+                    });
+                const root = await workflowRoot(id.projectRoot, workflowProfile.artifactBase, workflowProfile.artifactSubdir, id.workflowId);
+                const currentState = await loadState(root);
+                const roadmapFile = path.join(root, ".ddd", "delivery", "roadmap.json");
+                if (currentState.deliveryPlan?.source === "structured-openspec-plan"
+                    && currentState.deliveryPlan.sliceIds.length > 0 && await exists(roadmapFile)) {
+                    return out({
+                        status: "ready",
+                        alreadyCompiled: true,
+                        immutable: true,
+                        plannedSlices: currentState.deliveryPlan.sliceIds.length,
+                        sliceIds: currentState.deliveryPlan.sliceIds,
+                        nextAction: `不要再次调用 openspec-plan；只调用 {"action":"complete-stage","input":{}}。运行时将从已编译计划生成 ${planningStageId}，并自动设置 plannedSlices=${currentState.deliveryPlan.sliceIds.length}。`,
+                    });
                 }
+                if (!i?.plan || typeof i.plan !== "object" || Array.isArray(i.plan))
+                    return out({
+                        error: "openspec-plan 需要顶层 plan 对象；不要放入 input 字符串。运行时会编译 proposal/specs/design/tasks/roadmap。",
+                        requiredPlanFields: ["title", "objective", "nonGoals", "designDecisions", "capabilities[].requirements[].scenarios[]", "slices[]"],
+                        exampleShape: { action: "openspec-plan", plan: { title: "...", objective: "...", nonGoals: [], designDecisions: [], capabilities: [], slices: [] } },
+                    });
+                const draftFile = path.join(root, ".ddd", "workbench", "openspec-plan.draft.json");
+                const currentDraft = i.mode === "repair" && await exists(draftFile)
+                    ? await readJson(draftFile) : undefined;
+                const plan = normalizeStructuredPlan(i.plan, currentDraft);
+                await writeJson(draftFile, plan);
+                const findings = [
+                    ...validateStructuredPlan(plan),
+                    ...await validatePlanAgainstApprovedDesign(id.projectRoot, root, workflowProfile, currentState, plan),
+                ];
+                if (findings.length)
+                    return out({
+                        status: "invalid", findings, draftSaved: true, retryableByModel: true,
+                        nextAction: "用 mode=repair 只提交 findings 涉及的 capability 或 slice；运行时保留其余草稿字段。",
+                    });
+                const compiled = compileStructuredPlan(plan, id.workflowId);
                 const contractFile = path.join(id.projectRoot, "openspec", "changes", id.workflowId, "ddd", "model-contract.json");
-                let design = String(i.design);
+                let design = compiled.design;
                 if (await exists(contractFile)) {
                     const contract = await readJson(contractFile);
+                    const approvedModels = new Set((contract.modelElements ?? []).map((item) => String(item.id)));
+                    const approvedInvariants = new Set((contract.invariants ?? []).map((item) => String(item.id)));
+                    const referencedModels = new Set(plan.slices.flatMap((slice) => slice.modelElementIds));
+                    const referencedInvariants = new Set(plan.slices.flatMap((slice) => slice.invariantIds));
+                    const modelFindings = [
+                        ...[...referencedModels].filter((modelId) => !approvedModels.has(modelId)).map((modelId) => ({ code: "PLAN_MODEL_UNKNOWN", path: "plan.slices[].modelElementIds", message: `${modelId} 不在批准的 model-contract.json 中。` })),
+                        ...[...referencedInvariants].filter((invariantId) => !approvedInvariants.has(invariantId)).map((invariantId) => ({ code: "PLAN_INVARIANT_UNKNOWN", path: "plan.slices[].invariantIds", message: `${invariantId} 不在批准的 model-contract.json 中。` })),
+                        ...[...approvedModels].filter((modelId) => !referencedModels.has(modelId)).map((modelId) => ({ code: "PLAN_MODEL_UNCOVERED", path: "plan.slices", message: `批准模型 ${modelId} 未被任何纵向切片覆盖。` })),
+                        ...[...approvedInvariants].filter((invariantId) => !referencedInvariants.has(invariantId)).map((invariantId) => ({ code: "PLAN_INVARIANT_UNCOVERED", path: "plan.slices", message: `批准不变量 ${invariantId} 未被任何纵向切片覆盖。` })),
+                    ];
+                    if (modelFindings.length)
+                        return out({ status: "invalid", findings: modelFindings, draftSaved: true, retryableByModel: true,
+                            nextAction: "用 mode=repair 修正切片的 modelElementIds/invariantIds，必须与批准模型合同完全覆盖。" });
                     const appendix = [
                         "## 批准模型合同（运行时注入，不可改写）",
                         ...(contract.modelElements ?? []).map((item) => `- ${item.id} ${item.name}`),
@@ -322,21 +470,15 @@ const lifecycleTool = tool({
                     ].join("\n");
                     design = `${design.trim()}\n\n${appendix}`;
                 }
-                const normalizedSpecs = Array.isArray(i.specs) ? i.specs.map((spec) => ({
-                    ...spec,
-                    content: normalizeDeltaSpec(spec?.content, id.workflowType),
-                })) : [];
+                const normalizedSpecs = compiled.specs.map((spec) => ({ ...spec, content: normalizeDeltaSpec(spec.content, id.workflowType) }));
                 const malformed = normalizedSpecs.filter((spec) => {
                     if (!spec.capability || !/^##\s+(?:ADDED|MODIFIED|REMOVED|RENAMED)\s+Requirements\s*$/mu.test(spec.content))
                         return true;
                     const blocks = String(spec.content).split(/^###\s+Requirement:/mu).slice(1);
                     return blocks.length === 0 || blocks.some((block) => !/\b(?:MUST|SHALL)\b/u.test(block) || !/^####\s+Scenario:/mu.test(block));
                 });
-                if (i.skipSpecs !== true && malformed.length) {
-                    return out({ error: `openspec-plan 预校验失败：${malformed.map((spec) => spec.capability || "unnamed").join("、")} 的每个 Requirement 都必须含 MUST/SHALL 和自己的 #### Scenario。工具会归一新增标题，并可把现有 WHEN/THEN 自动包装为 Scenario。尚未写入任何工件。` });
-                }
-                if (!/^\s*-\s*\[[ xX]\]/mu.test(String(i.tasks)))
-                    return out({ error: "openspec-plan 预校验失败：tasks 必须包含 checkbox 任务；尚未写入任何工件。" });
+                if (i.skipSpecs !== true && malformed.length)
+                    throw new Error("STRUCTURED_PLAN_COMPILER_DEFECT：运行时生成了非法 Delta Spec。");
                 const specsRoot = path.join(id.projectRoot, "openspec", "changes", id.workflowId, "specs");
                 if (await exists(specsRoot) && i.skipSpecs !== true) {
                     const keep = new Set(normalizedSpecs.map((spec) => String(spec.capability)));
@@ -346,7 +488,7 @@ const lifecycleTool = tool({
                     }
                 }
                 const results = [];
-                results.push(await openspec({ ...id, artifact: "proposal", content: String(i.proposal) }));
+                results.push(await openspec({ ...id, artifact: "proposal", content: compiled.proposal }));
                 if (i.skipSpecs === true) {
                     results.push(await openspec({ ...id, artifact: "specs", skipSpecs: true }));
                 }
@@ -361,8 +503,22 @@ const lifecycleTool = tool({
                     }
                 }
                 results.push(await openspec({ ...id, artifact: "design", content: design }));
-                results.push(await openspec({ ...id, artifact: "tasks", content: String(i.tasks) }));
-                return out({ status: "ready", artifacts: results.map((result) => result.artifact), nextAction: "提交当前 delivery-plan 阶段。" });
+                results.push(await openspec({ ...id, artifact: "tasks", content: compiled.tasks }));
+                const deliveryRoot = path.join(root, ".ddd", "delivery");
+                await writeJson(path.join(deliveryRoot, "plan.json"), plan);
+                await writeJson(path.join(deliveryRoot, "roadmap.json"), compiled.roadmap);
+                const state = await loadState(root);
+                state.deliveryPlan = {
+                    source: "structured-openspec-plan",
+                    sliceIds: plan.slices.map((slice) => slice.id),
+                    dependencies: Object.fromEntries(plan.slices.map((slice) => [slice.id, slice.dependsOn])),
+                    completedSliceIds: [],
+                };
+                await saveState(root, state);
+                await rm(draftFile, { force: true });
+                return out({ status: "ready", artifacts: results.map((result) => result.artifact),
+                    plannedSlices: plan.slices.length, sliceIds: state.deliveryPlan.sliceIds,
+                    nextAction: `只调用 {"action":"complete-stage","input":{}}；运行时将从已校验计划确定性编译里程碑 V，并自动设置 plannedSlices=${plan.slices.length}。` });
             }
             return out({ error: `未知 action：${args.action}` });
         }
@@ -422,7 +578,7 @@ const submitSectionTool = tool({
         observations: tool.schema.array(tool.schema.object({
             kind: observationKind,
             statement: reqText().describe("正文中的一条事实、约束、证据缺口或开放问题。"),
-            evidence_refs: tool.schema.array(reqText()).optional().describe("可检查引用，例如 code:src/A.java#L10、test:tests/A.test、search:src/**。事实必须提供。"),
+            evidence_refs: tool.schema.array(reqText()).optional().describe("可检查引用，例如 code:src/A.java#L10、test:tests/A.test。负向 search: 引用只能逐字复制 evidence-bundle 签发的 negativeSearchEvidence.ref。"),
             absent: tool.schema.boolean().optional().describe("只有负向搜索证明不存在时才为 true，并提供 search: 引用。"),
         })).optional().describe("仅现状证据阶段需要；其它阶段省略。"),
     },
@@ -475,12 +631,69 @@ const activeStages = new Map();
 const repositoryCalls = new Map();
 const shellCalls = new Map();
 const evidenceTools = new Set(["read", "glob", "grep"]);
+const implementationStages = new Set(["08-implementation", "09-implementation", "11-implementation"]);
+const baselineStages = new Set(["01-current-evidence", "01-baseline-evidence"]);
+const lifecycleActions = new Set(["init", "prepare", "evidence-bundle", "complete-stage", "review", "status", "block", "archive", "openspec", "openspec-plan"]);
+function lifecyclePayload(args) {
+    if (!args)
+        return {};
+    if (typeof args.input === "string") {
+        try {
+            const parsed = JSON.parse(args.input);
+            return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        }
+        catch {
+            return {};
+        }
+    }
+    return args.input && typeof args.input === "object" && !Array.isArray(args.input) ? args.input : {};
+}
+function dddRequestFromMessage(parts) {
+    for (const part of parts) {
+        if (part?.type !== "text")
+            continue;
+        const raw = String(part.text ?? "").trim().replace(/^(?:"|')|(?:"|')$/gu, "").trim();
+        const match = raw.match(/^\/ddd(?:\s+)([\s\S]+)$/u);
+        if (match?.[1]?.trim())
+            return match[1].trim();
+    }
+    return undefined;
+}
 export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
     // OpenCode and Mobile Coder 1.3+ both expose this definition directly from
     // the Plugin SDK. No MCP process, protocol adapter, or duplicated tool is
     // involved.
     const lifecycleToolId = "ddd_lifecycle";
     return {
+        async "chat.message"(input, output) {
+            const originalRequest = dddRequestFromMessage(output.parts);
+            if (!originalRequest)
+                return;
+            dddSessions.add(input.sessionID);
+            pendingOriginalRequests.set(input.sessionID, originalRequest);
+            // Mobile derives the visible tool table from UserMessage.tools. Put the
+            // modeling policy at that boundary so disallowed tools are physically
+            // absent from the model schema instead of relying only on a later hook.
+            output.message.tools = {
+                ...(output.message.tools ?? {}),
+                subagent: false,
+                workflow_run: false,
+                todowrite: false,
+                read: false,
+                glob: false,
+                grep: false,
+                bash: false,
+                shell: false,
+                edit: false,
+                write: false,
+                apply_patch: false,
+                patch: false,
+                multiedit: false,
+                multi_edit: false,
+                skill_run_script: false,
+                webfetch: false,
+            };
+        },
         async config(config) {
             config.agent ??= {};
             config.agent[DDD_AGENT_ID] = {
@@ -488,7 +701,7 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
                 description: "Run the deterministic DDD/OpenSpec lifecycle with a reduced tool surface.",
                 mode: "primary",
                 maxSteps: 30,
-                prompt: "DDD scheduler mode: use tools without progress narration. Existing-system baseline is prepare, one evidence-bundle, then one complete-stage; repository and shell exploration are unnecessary. Other stages are prepare then one complete-stage. Use openspec-plan once at milestone V. Stop only at a human gate or real block.",
+                prompt: "DDD scheduler mode: use tools without progress narration. Existing-system baseline is prepare, one evidence-bundle, then one complete-stage; repository and shell exploration are unnecessary. Other stages are prepare then one complete-stage. At milestone V send one structured plan to openspec-plan, then complete-stage with empty input; never hand-write OpenSpec or milestone-V Markdown. Human approval of unresolved candidates must include resolution.selectedCandidateId. Stop only at a human gate or real block.",
                 tools: { ...(config.agent[DDD_AGENT_ID]?.tools ?? {}), ...modelingOnlyTools },
             };
             config.agent[DDD_CODE_AGENT_ID] = {
@@ -546,30 +759,36 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
             }
             if (input.tool === "skill" && args?.name === "ddd-orchestrate")
                 dddSessions.add(input.sessionID);
-            const stagePayload = String(args?.input?.stage ?? "");
-            const isDddLifecyclePayload = typeof args?.action === "string" && (args.action === "init" ||
-                /^(?:0[0-9]|10)-[a-z0-9-]+$/u.test(stagePayload) ||
-                (dddSessions.has(input.sessionID) && ["status", "archive", "openspec", "openspec-plan", "evidence-bundle"].includes(args.action)));
+            const payload = lifecyclePayload(args);
+            const stagePayload = String(payload.stage ?? "");
+            const isDddLifecyclePayload = typeof args?.action === "string" && lifecycleActions.has(args.action) && (input.tool === lifecycleToolId ||
+                args.action === "init" ||
+                /^(?:0[0-9]|1[0-2])-[a-z0-9-]+$/u.test(stagePayload) ||
+                dddSessions.has(input.sessionID));
             if (isDddLifecyclePayload) {
                 // The lifecycle call itself is authoritative proof that this is a DDD
                 // session. Mobile Coder may wrap a configured custom tool under an
                 // internal id that differs from the UI label, so payload shape is more
                 // reliable than input.tool here.
                 dddSessions.add(input.sessionID);
-                if (args?.action === "prepare" && args?.input?.stage) {
-                    const stage = String(args.input.stage);
+                if (args?.action === "prepare" && payload.stage) {
+                    const stage = String(payload.stage);
                     activeStages.set(input.sessionID, stage);
                     repositoryCalls.set(input.sessionID, 0);
                     shellCalls.set(input.sessionID, 0);
-                    if (stage === "01-current-evidence")
+                    if (baselineStages.has(stage))
                         evidenceCalls.set(input.sessionID, 0);
                 }
-                if (["submit", "complete-stage"].includes(args?.action) && args?.input?.stage === "01-current-evidence") {
+                if (["submit", "complete-stage"].includes(args?.action) && baselineStages.has(String(payload.stage ?? ""))) {
                     evidenceCalls.delete(input.sessionID);
                 }
             }
-            const activeStage = activeStages.get(input.sessionID);
-            if (activeStage === "09-implementation") {
+            const activeStage = activeStages.get(input.sessionID)
+                ?? await persistedStageForSession(path.resolve(pluginInput.worktree || pluginInput.directory || process.cwd()), input.sessionID);
+            const sessionIsDdd = dddSessions.has(input.sessionID) || Boolean(activeStage);
+            if (sessionIsDdd)
+                dddSessions.add(input.sessionID);
+            if (activeStage && implementationStages.has(activeStage)) {
                 if (["subagent", "workflow_run", "todowrite"].includes(input.tool)) {
                     throw new Error("DDD_IMPLEMENTATION_TOOL_DENIED: 一个纵向切片必须在当前短事务内实现，禁止子代理、工作流扇出和探索 Todo。使用批准的文件映射；证据环境不可用时调用 action=block。");
                 }
@@ -606,12 +825,12 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
             if (input.tool === "edit" || input.tool === "write" || input.tool === "apply_patch" || input.tool === "patch" || input.tool === "multiedit") {
                 const target = String(args?.filePath ?? args?.path ?? "").replace(/\\/gu, "/");
                 const formalArtifact = /(?:^|\/)openspec\/changes\/[^/]+\/(?:ddd\/(?:I|II|III|IV|V|VI)-[a-z-]+\.md|proposal\.md|design\.md|tasks\.md|specs\/[^/]+\/spec\.md)$/iu;
-                if (dddSessions.has(input.sessionID) && target && formalArtifact.test(target)) {
+                if (sessionIsDdd && target && formalArtifact.test(target)) {
                     throw new Error("DDD_FORMAL_ARTIFACT_WRITE_DENIED: 正式里程碑和 OpenSpec 规划工件只能通过 ddd_lifecycle 的 complete-stage/openspec-plan 事务写入，禁止使用通用文件工具绕过结构、语义与 strict validate 门禁。");
                 }
             }
-            if (dddSessions.has(input.sessionID) && activeStage !== "09-implementation"
-                && ["read", "glob", "grep", "bash", "shell"].includes(input.tool)) {
+            if (sessionIsDdd && (!activeStage || !implementationStages.has(activeStage))
+                && !isDddLifecyclePayload && input.tool !== "skill") {
                 throw new Error("DDD_LIFECYCLE_ONLY: 当前建模/审批阶段只允许 professional skill 与 ddd_lifecycle。无需检查 Skill 目录、扫描 OpenSpec 或查找 CLI；review 会自动绑定当前人工门，prepare 会返回全部阶段上下文。");
             }
         },
