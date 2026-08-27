@@ -1007,6 +1007,28 @@ test("strategic event storm allows negated technical terms and recommendations i
   }
 })
 
+test("strategic intent guard distinguishes recommended choices from recommendation capabilities", () => {
+  const choice = validateStageSemantics(
+    { originalRequest: "新增用户一日光顾店铺轨迹" },
+    { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } },
+    {
+      summary: "推荐以查看店铺详情作为光顾触发候选。",
+      sections: { "一页结论": "本次推荐候选 A，它仍只交付用户一日光顾轨迹。" },
+    },
+  )
+  assert.ok(!choice.some((finding) => finding.code === "INTENT_CAPABILITY_EXPANSION"))
+
+  const capability = validateStageSemantics(
+    { originalRequest: "新增用户一日光顾店铺轨迹" },
+    { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } },
+    {
+      summary: "额外交付智能推荐能力。",
+      sections: { "一页结论": "主流程将一日轨迹输入智能推荐系统并返回推荐店铺。" },
+    },
+  )
+  assert.ok(capability.some((finding) => finding.code === "INTENT_CAPABILITY_EXPANSION"))
+})
+
 test("strategic event storm does not hide technical design behind current or future category labels", () => {
   const findings = validateStageSemantics(
     { originalRequest: "当用户主动签到后记录光顾，并返回当日轨迹" },

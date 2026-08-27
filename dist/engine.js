@@ -879,7 +879,13 @@ export function validateStageSemantics(state, stage, input) {
         const businessText = [...(onlyAdvisory ? [] : [input.summary]), ...entries
                 .filter(([heading]) => !advisoryHeadings.has(heading))
                 .map(([, text]) => text)].join("\n");
-        const capabilityTerms = ["计数", "统计", "排行", "区间查询", "支付", "推荐", "导出", "审批", "核销"];
+        // Single words such as “推荐” also describe an advisory choice (“推荐方案 A”).
+        // Match recommendation *capabilities* with a business object/qualifier so
+        // strategic advice is not misclassified as intent expansion.
+        const capabilityTerms = [
+            "计数", "统计", "排行", "区间查询", "支付", "个性化推荐", "智能推荐",
+            "店铺推荐", "内容推荐", "推荐分析", "推荐系统", "导出", "审批", "核销",
+        ];
         const expanded = capabilityTerms.filter((term) => !original.includes(term) && hasAffirmativeOccurrence(businessText, term));
         if (expanded.length)
             addFinding("INTENT_CAPABILITY_EXPANSION", "originalRequest", expanded, "提交内容把原始需求未授权的能力写入了主流程、用例或验收结果");

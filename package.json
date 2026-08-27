@@ -4,6 +4,9 @@
   "description": "Lightweight OpenCode SDK plugin for DDD/OpenSpec workflows. LLM-friendly state machine + skills.",
   "type": "module",
   "exports": "./dist/index.js",
+  "bin": {
+    "ddd-workflow-mcp": "./dist/mcp-server.js"
+  },
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
@@ -20,6 +23,7 @@
   },
   "dependencies": {
     "@fission-ai/openspec": "1.7.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@opencode-ai/plugin": "1.18.18",
     "zod": "4.4.3"
   },
