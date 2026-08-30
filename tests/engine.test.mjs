@@ -718,6 +718,57 @@ test("evidence stage blocks unapproved future acceptance behavior disguised as a
   }
 })
 
+test("evidence stage accepts claim-backed AS-IS behavior and mandatory compatibility prose", async () => {
+  const dir = await freshProject()
+  try {
+    const fact = "受保护路由先经 requireUser 校验身份，未认证返回 401 authentication_required；未匹配路由返回 404 not_found。"
+    const constraint = "现有行为必须保持：GET /health、GET /shops/:id 以及未认证时返回 401。用户自有数据必须通过 JsonFileStore 持久化，测试使用独立临时目录。"
+    await initialize({ workflowType: "add-feature", workflowId: "claim-backed-as-is", projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const payload = baselinePayload({ fact, constraint, sections: {
+      "输入场景与现状事实": `现状事实：受保护路由先经 requireUser 校验身份，未认证返回 401，未匹配返回 404；\n\n### 结构化结论\n- ${fact}\n\n事实、假设与待确认项已经分开记录；可执行验收约束只保护已有行为。`,
+      "证据与追踪": `兼容性约束（现状须保持）：现有行为必须保持 GET /health、GET /shops/:id 以及未认证时返回 401；\n\n- ${constraint}\n\n现状代码证据索引与验证基线已经建立；OpenSpec历史战略基线当前为空。`,
+    } })
+    const result = await submit({ workflowType: "add-feature", workflowId: "claim-backed-as-is", projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.equal(result.lastCompletedStage, "01-current-evidence", JSON.stringify(result.findings, null, 2))
+    assert.ok(!result.findings?.some((finding) => finding.code === "EVIDENCE_STAGE_TARGET_BEHAVIOR_LEAK"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("current evidence cannot authorize target behavior that merely borrows AS-IS anchors", async () => {
+  const dir = await freshProject()
+  try {
+    const fact = "受保护路由先经 requireUser 校验身份，未认证返回 401 authentication_required；未匹配路由返回 404 not_found。"
+    await initialize({ workflowType: "add-feature", workflowId: "borrowed-as-is-anchors", projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const payload = baselinePayload({ fact })
+    payload.sections["输入场景与现状事实"] += "\n\n新增收藏命令必须通过 requireUser 校验，未认证返回 401，店铺不存在返回 404。"
+    const result = await submit({ workflowType: "add-feature", workflowId: "borrowed-as-is-anchors", projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "EVIDENCE_STAGE_TARGET_BEHAVIOR_LEAK"))
+    assert.equal(result.lastCompletedStage, "00-request")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("an exact AS-IS quote cannot authorize target behavior appended to the same sentence", async () => {
+  const dir = await freshProject()
+  try {
+    const fact = "受保护路由使用 requireUser 校验身份，未认证返回 401 authentication_required。"
+    await initialize({ workflowType: "add-feature", workflowId: "appended-target-behavior", projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const payload = baselinePayload({ fact })
+    payload.sections["输入场景与现状事实"] += `\n\n${fact.slice(0, -1)}，因此新增收藏命令必须返回 404。`
+    const result = await submit({ workflowType: "add-feature", workflowId: "appended-target-behavior", projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "EVIDENCE_STAGE_TARGET_BEHAVIOR_LEAK"))
+    assert.equal(result.lastCompletedStage, "00-request")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test("evidence stage rejects constraints on hypothetical new tables and Redis keys", async () => {
   const dir = await freshProject()
   try {

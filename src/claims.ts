@@ -42,6 +42,11 @@ const availabilities = new Set(["operational", "partial", "stub", "absent", "unk
 const absencePattern = /(?:^|(?:当前|现有|既有|代码|系统|仓库|能力|实现|定义|证据|路径|接口|表))[^。；]{0,18}(?:不存在|未发现|尚无|没有|无专门)|(?:只有|仅有)[^。；]{0,30}(?:能力|实现|路径|接口|表|模块)/u
 const absenceMetaPattern = /(?:不存在|未发现|尚无|没有|无专门)[^。；]{0,20}(?:待确认|开放问题|问题|证据|信息|结论|决定|说明)/u
 const currentFactKinds = new Set(["current-behavior-fact", "current-topology-fact"])
+const currentAuthorityKinds = new Set([
+  ...currentFactKinds,
+  "current-spec-decision",
+  "compatibility-constraint",
+])
 
 function isDomainAbsenceAssertion(text: string): boolean {
   const compact = text.replace(/\s+/gu, "")
@@ -88,27 +93,65 @@ function hasUnnegatedDesignDecision(text: string): boolean {
   return !/(?:不在本阶段|本阶段不|尚未|未决定|不得|禁止|不应|不能|无需|不代表|不意味着|是否)[^。；\n]{0,60}$/u.test(compact)
 }
 
+function normalizedClaimText(value: string): string {
+  return value.normalize("NFKC")
+    .replace(/^\s*(?:#{1,6}\s*|[-*+]\s*|\d+[.)、]\s*)/u, "")
+    .replace(/[\p{P}\p{S}\s]+/gu, "")
+    .toLowerCase()
+}
+
+function evidenceAnchors(value: string): Set<string> {
+  const matches = value.normalize("NFKC").toLowerCase()
+    .match(/[a-z_][a-z0-9_.:/-]*|\b\d{3}\b/gu) ?? []
+  return new Set(matches.filter((item) => item.length >= 3 || /^\d{3}$/u.test(item)))
+}
+
+function isTargetScopedBehavior(value: string): boolean {
+  const compact = value.replace(/\s+/gu, "")
+  return /(?:新增|新建|新功能|目标态|目标行为|本次(?:功能|变更)|未来|后续将|计划|拟定|候选方案)/u.test(compact)
+}
+
+function claimBacksCurrentSentence(sentence: string, claim: StageClaim): boolean {
+  if (!currentAuthorityKinds.has(claim.kind) || claim.maturity !== "fact"
+    || !Array.isArray(claim.evidenceRefs) || claim.evidenceRefs.length === 0
+    || !nonEmpty(claim.statement)) return false
+
+  // A sentence that appends a target proposal to a legitimate AS-IS quote is
+  // still target-scoped as a whole. Check this before exact/containment
+  // matching so `<fact>, therefore the new command must ...` cannot inherit
+  // the fact's authority.
+  if (isTargetScopedBehavior(sentence)) return false
+
+  const normalizedSentence = normalizedClaimText(sentence)
+  const normalizedStatement = normalizedClaimText(claim.statement)
+  if (normalizedSentence.length >= 8 && normalizedStatement.length >= 8
+    && (normalizedSentence.includes(normalizedStatement) || normalizedStatement.includes(normalizedSentence))) return true
+
+  // A paraphrased AS-IS sentence may omit response labels such as
+  // `authentication_required`, but it must retain multiple concrete anchors
+  // from one typed fact. One shared status code is deliberately insufficient:
+  // an existing GET 404 must never authorize a new command's 404 outcome.
+  const sentenceAnchors = evidenceAnchors(sentence)
+  const claimAnchors = evidenceAnchors(claim.statement)
+  if (sentenceAnchors.size < 2 || claimAnchors.size < 2) return false
+  const shared = [...sentenceAnchors].filter((anchor) => claimAnchors.has(anchor)).length
+  return shared >= 2 && shared / Math.min(sentenceAnchors.size, claimAnchors.size) >= 0.6
+}
+
 function isProvenCurrentDecision(sentence: string, claims: StageClaim[]): boolean {
-  const exactFact = claims.some((claim) =>
-    currentFactKinds.has(claim.kind) && claim.maturity === "fact" && claim.evidenceRefs.length > 0
-    && (sentence.includes(claim.statement) || claim.statement.includes(sentence)))
-  if (exactFact) return true
-  const citedCurrentFact = claims.some((claim) => {
-    if (!currentFactKinds.has(claim.kind) || claim.maturity !== "fact") return false
-    return claim.evidenceRefs.some((reference) => {
-      const relative = normalizeReferencePath(reference)
-      if (!relative) return false
-      const normalized = relative.replace(/\\/gu, "/")
-      return sentence.includes(normalized) || sentence.includes(path.basename(normalized))
-    })
-  })
-  const futureDecision = /(?:将|应当|应该|须|必须|计划|拟|候选|建议|决定)(?:采用|使用|引入|新增|新建|设计|实现|拆分|迁移)/u.test(sentence.replace(/\s+/gu, ""))
-  if (citedCurrentFact && !futureDecision) return true
-  const currentMarker = /(?:当前|现有|既有|已经|运行中|生产中)/u.test(sentence)
-  if (!currentMarker) return false
-  return claims.some((claim) =>
-    claim.maturity === "fact" && claim.evidenceRefs.length > 0
-    && (sentence.includes(claim.statement) || claim.statement.includes(sentence)))
+  if (claims.some((claim) => claimBacksCurrentSentence(sentence, claim))) return true
+
+  // An exact evidence reference may authorize an explicitly AS-IS sentence.
+  // Requiring the complete reference avoids the former basename-only match,
+  // which let an unrelated line in the same file leak into target behavior.
+  const compact = sentence.replace(/\s+/gu, "")
+  const currentScoped = /(?:当前|现有|既有|已经|运行中|生产中|AS-IS|兼容|保持)/iu.test(compact)
+  if (!currentScoped || isTargetScopedBehavior(sentence)) return false
+  return claims.some((claim) => currentAuthorityKinds.has(claim.kind) && claim.maturity === "fact"
+    && Array.isArray(claim.evidenceRefs) && claim.evidenceRefs.some((reference) => {
+      const visibleReference = reference.replace(/^(?:code|schema|test|runtime|openspec|git):/u, "")
+      return sentence.includes(reference) || (visibleReference.includes("#") && sentence.includes(visibleReference))
+    }))
 }
 
 function isDeclaredUncertainty(sentence: string, claims: StageClaim[]): boolean {
@@ -125,10 +168,7 @@ function isUnprovenTargetBehavior(sentence: string, claims: StageClaim[]): boole
   if (!behaviorContract) return false
   if (/(?:待确认|未明确|尚未决定|是否|候选|开放问题|evidence-gap|open-question)/iu.test(compact)) return false
   if (isProvenCurrentDecision(sentence, claims)) return false
-  const preservedCompatibility = /(?:不得|不应|不能)(?:破坏|改变|修改)|(?:保持|兼容)(?:现有|既有)/u.test(compact)
-    && claims.some((claim) => claim.kind === "compatibility-constraint"
-      && (sentence.includes(claim.statement) || claim.statement.includes(sentence)))
-  return !preservedCompatibility
+  return true
 }
 
 export async function validateStageClaims(
