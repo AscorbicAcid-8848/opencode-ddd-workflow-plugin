@@ -21,6 +21,18 @@ export function requiresScenarioClarification(request) {
 }
 const DECISION_LEDGER_SCOPES = new Set(["system-discovery", "system-strategy", "context-discovery", "context-tactical-design"]);
 const DECISION_SOURCE_PREFIX = /^(?:user-input|code|schema|test|runtime|openspec|git|search|decision):/u;
+const DECISION_NON_AUTHORITATIVE_HEADINGS = new Set([
+    "本次请您确认", "备选解释与建议", "备选战略方案与建议", "证据与追踪", "业务验收记录",
+]);
+function canonicalDecisionText(value) {
+    return value.normalize("NFKC").toLocaleLowerCase()
+        .replace(/[\s“”‘’'"`，。；：:、！？!?（）()【】\[\]{}]/gu, "");
+}
+function authoritativeDecisionText(sections, summary = "") {
+    return [summary, ...Object.entries(sections)
+            .filter(([heading]) => !DECISION_NON_AUTHORITATIVE_HEADINGS.has(heading))
+            .map(([, value]) => value)].filter(Boolean).join("\n");
+}
 function normalizedDecisionItems(raw, stageId) {
     if (!Array.isArray(raw))
         return undefined;
@@ -35,7 +47,16 @@ function normalizedDecisionItems(raw, stageId) {
         })),
         ...(String(item?.recommendationId ?? "").trim() ? { recommendationId: String(item.recommendationId).trim() } : {}),
         status: ["open", "deferred", "out-of-scope"].includes(String(item?.status ?? "")) ? item.status : "open",
-        blocks: (Array.isArray(item?.blocks) ? item.blocks : []).map(String).map((value) => value.trim()).filter(Boolean),
+        blocks: (Array.isArray(item?.blocks) ? item.blocks : []).map((block) => {
+            if (!block || typeof block !== "object" || Array.isArray(block)) {
+                return { id: "", statement: String(block ?? "").trim(), documentSection: "" };
+            }
+            return {
+                id: String(block.id ?? "").trim(),
+                statement: String(block.statement ?? "").trim(),
+                documentSection: String(block.documentSection ?? "").trim(),
+            };
+        }),
         sourceRefs: (Array.isArray(item?.sourceRefs) ? item.sourceRefs : []).map(String).map((value) => value.trim()).filter(Boolean),
         ...(String(item?.deferredToStage ?? "").trim() ? { deferredToStage: String(item.deferredToStage).trim() } : {}),
     }));
@@ -63,7 +84,9 @@ function legacyDecisionItems(ambiguity, stageId, sections) {
             options,
             ...(recommendationId ? { recommendationId } : {}),
             status: "open",
-            blocks: affected.length ? affected : ["当前里程碑唯一结论"],
+            blocks: (affected.length ? affected : ["当前里程碑唯一结论"]).map((statement, index) => ({
+                id: `LEGACY-BLOCK-${index + 1}`, statement, documentSection: "一页结论",
+            })),
             sourceRefs: ["user-input:original-request"],
         }];
 }
@@ -75,17 +98,17 @@ export function renderDecisionReviewSection(items) {
         ...open.flatMap((item) => [
             `### ${item.id} ${item.question}`,
             ...item.options.map((option) => `- ${option.id}${item.recommendationId === option.id ? "（推荐）" : ""}：${option.label}${option.impact ? `；影响：${option.impact}` : ""}`),
-            `- blocks：${item.blocks.join("、")}`,
+            `- blocks：${item.blocks.map((block) => `${block.id}（${block.documentSection}）：${block.statement}`).join("；")}`,
         ]),
     ] : [
         "本阶段没有待选择的业务决策。",
         "回复“批准”表示接受本文正文中的完整方案；如有不符合业务认知之处，请回复“修改：...”。",
     ];
     if (deferred.length)
-        lines.push("", "### 已明确延期或排除", ...deferred.map((item) => `- ${item.id}：${item.question}（${item.status}）`));
+        lines.push("", "### 已明确延期或排除", ...deferred.map((item) => `- ${item.id}：${item.question}（${item.status}${item.deferredToStage ? ` → ${item.deferredToStage}` : ""}）`));
     return lines.join("\n");
 }
-export function validateHumanDecisionContract(state, stage, sections, decisionItems) {
+export function validateHumanDecisionContract(state, stage, sections, decisionItems, summary = "") {
     if (!stage.humanGate || !DECISION_LEDGER_SCOPES.has(stage.scopeContract?.id ?? ""))
         return [];
     const findings = [];
@@ -97,6 +120,7 @@ export function validateHumanDecisionContract(state, stage, sections, decisionIt
             }];
     const ids = new Set();
     const prior = new Map((state.decisionLedger ?? []).map((item) => [item.id, item]));
+    const authoritativeText = canonicalDecisionText(authoritativeDecisionText(sections, summary));
     for (let index = 0; index < items.length; index += 1) {
         const item = items[index];
         const base = `decisionItems[${index}]`;
@@ -126,8 +150,45 @@ export function validateHumanDecisionContract(state, stage, sections, decisionIt
                     message: "当前 open 决策没有唯一推荐项；普通‘批准’不会替人类随机选择。",
                 });
         }
+        if (item.status === "deferred" && !item.deferredToStage)
+            findings.push({
+                code: "DEFERRED_DECISION_TARGET_REQUIRED", path: `${base}.deferredToStage`, severity: "blocking",
+                message: "deferred 决策必须声明 deferredToStage，确保它进入正确的后续专业阶段，而不是从工作流中消失。",
+            });
         if (item.blocks.length === 0)
             findings.push({ code: "DECISION_BLOCKS_REQUIRED", path: `${base}.blocks`, severity: "blocking", message: "决策必须列出被阻塞的场景、规则、用例或模型稳定标识。" });
+        const blockIds = new Set();
+        for (let blockIndex = 0; blockIndex < item.blocks.length; blockIndex += 1) {
+            const blockPath = `${base}.blocks[${blockIndex}]`;
+            const block = item.blocks[blockIndex];
+            if (!/^[A-Za-z][A-Za-z0-9._-]{2,80}$/u.test(block.id)
+                || block.statement.length < 4 || !block.documentSection) {
+                findings.push({
+                    code: "DECISION_BLOCK_TARGET_SCHEMA_REQUIRED", path: blockPath, severity: "blocking",
+                    message: "block 必须是 {id, statement, documentSection} 对象；纯字符串不能证明它对应正文中的哪条结论。",
+                });
+                continue;
+            }
+            if (blockIds.has(block.id))
+                findings.push({
+                    code: "DECISION_BLOCK_TARGET_DUPLICATED", path: `${blockPath}.id`, severity: "blocking",
+                    message: `同一决策内的 block target id 重复：${block.id}。`,
+                });
+            blockIds.add(block.id);
+            if (!Object.hasOwn(sections, block.documentSection)
+                || DECISION_NON_AUTHORITATIVE_HEADINGS.has(block.documentSection)) {
+                findings.push({
+                    code: "DECISION_BLOCK_SECTION_INVALID", path: `${blockPath}.documentSection`, severity: "blocking",
+                    message: `block target 必须指向当前里程碑的权威业务章节，不能指向审核、建议或证据区：${block.documentSection}。`,
+                });
+            }
+            const canonicalStatement = canonicalDecisionText(block.statement);
+            if (canonicalStatement.length >= 4 && authoritativeText.includes(canonicalStatement))
+                findings.push({
+                    code: "OPEN_DECISION_BLOCKED_TARGET_ASSERTED", path: `sections.${block.documentSection}`, severity: "blocking",
+                    message: `结论 ${block.id} 仍受 ${item.id} 阻塞，却已进入阶段摘要或权威正文：“${block.statement}”。批准前只能在运行时审核区或备选建议中展示。`,
+                });
+        }
         if (item.sourceRefs.length === 0 || item.sourceRefs.some((reference) => !DECISION_SOURCE_PREFIX.test(reference)))
             findings.push({
                 code: "DECISION_SOURCE_REQUIRED", path: `${base}.sourceRefs`, severity: "blocking",
@@ -139,12 +200,12 @@ export function validateHumanDecisionContract(state, stage, sections, decisionIt
                 message: `决策 ${item.id} 已在上游解决，当前阶段只能通过 decision:${item.id} 引用其结果；如需改变必须退回 ownerStage。`,
             });
     }
-    const openIds = items.filter((item) => item.status === "open").map((item) => item.id);
+    const trackedIds = items.map((item) => item.id);
     const unresolvedLines = Object.entries(sections)
         .filter(([heading]) => !["本次请您确认", "输入场景与现状事实", "备选解释与建议", "备选战略方案与建议", "证据与追踪", "业务验收记录"].includes(heading))
         .flatMap(([, value]) => value.split(/\r?\n/u))
-        .filter((line) => /[？?]|待确认(?:[：:]|为|是|$)|尚未决定|\bTBD\b|还是/u.test(line))
-        .filter((line) => !openIds.some((id) => line.includes(id)));
+        .filter((line) => /[？?]|待确认(?:[：:]|为|是|$)|尚未决定|\bTBD\b|还是|(?:仍|尚)?需(?:在|由)?[^。；\n]{0,36}(?:确认|决定|定义|澄清|选择|细化)|(?:留待|交由|后续|下一阶段|稍后)[^。；\n]{0,36}(?:确认|决定|定义|澄清|选择|细化)/u.test(line))
+        .filter((line) => !trackedIds.some((id) => line.includes(id)));
     if (unresolvedLines.length)
         findings.push({
             code: "UNTRACKED_OPEN_DECISION", path: "sections", severity: "blocking",
@@ -282,11 +343,12 @@ export async function prepare(input) {
         approvedHumanDecisions: state.humanDecisions ?? [],
         ...(stage.humanGate ? {
             humanDecisionContract: {
-                rule: "必须提交 decisionItems 数组；没有待选择项时提交空数组。每个 open 决策使用稳定 id、2 至 4 个 options、recommendationId、blocks 和 sourceRefs。运行时独占生成‘本次请您确认’，正文开放问题必须引用对应 decision id。",
-                submitField: "complete-stage.input.decisionItems=[{id:'DEC-...',question:'...',options:[{id:'OPT-A',label:'...',impact:'...'},...],recommendationId:'OPT-A',status:'open',blocks:['场景/规则/用例/模型ID'],sourceRefs:['user-input:original-request']}]",
+                rule: "必须提交 decisionItems 数组；没有待选择、延期或排除事项时提交空数组。每个 open 决策使用稳定 id、2 至 4 个 options、recommendationId、blocks 和 sourceRefs。每个 block 是 {id,statement,documentSection}；statement 是批准后才可写入指定权威章节的精确业务命题，批准前只能出现在运行时审核区或备选建议。延期事项用 status=deferred 和 deferredToStage 登记。运行时独占生成‘本次请您确认’。",
+                submitField: "complete-stage.input.decisionItems=[{id:'DEC-...',question:'...',options:[{id:'OPT-A',label:'...',impact:'...'},...],recommendationId:'OPT-A',status:'open',blocks:[{id:'RULE-01',statement:'重复收藏采用幂等且保留首次时间',documentSection:'战略事件风暴'}],sourceRefs:['user-input:original-request']}]",
                 approvalMeaning: "用户回复‘批准’接受每个 open 决策的唯一推荐 option；若某项无推荐，review.resolution.selections 必须逐项给出 decisionId→optionId。已解决的 decision id 不得在下游重开。",
             },
             effectiveDecisions: (state.decisionLedger ?? []).filter((item) => item.status === "resolved"),
+            deferredDecisions: (state.decisionLedger ?? []).filter((item) => item.status === "deferred" && item.deferredToStage === stage.id),
         } : {}),
         ...(stage.scopeContract?.id === "system-discovery" && requiresScenarioClarification(state.originalRequest ?? "") ? {
             ambiguityContract: {
@@ -731,7 +793,7 @@ async function validateSubmission(root, profile, state, stage, input, options = 
     const milestoneWriters = profile.stages.filter((item) => item.document === stage.document);
     const closesHumanMilestone = Boolean(stage.humanGate && milestoneWriters.at(-1)?.id === stage.id);
     if (!options.partial && closesHumanMilestone) {
-        findings.push(...validateHumanDecisionContract(state, stage, candidateSections, input.decisionItems));
+        findings.push(...validateHumanDecisionContract(state, stage, candidateSections, input.decisionItems, input.summary));
     }
     if (!options.partial)
         findings.push(...validateExternalPartyEvidence(state, stage, candidateSections));
@@ -889,9 +951,10 @@ function approvedSemanticContext(state) {
             String(decision?.candidateLabel ?? ""),
             ...(Array.isArray(decision?.resolvedDecisions) ? decision.resolvedDecisions.map(String) : []),
         ]),
-        ...(state.decisionLedger ?? []).filter((decision) => decision.status === "resolved").flatMap((decision) => [
-            decision.id, decision.question, decision.selectedOptionId ?? "", decision.selectedOptionLabel ?? "", ...decision.blocks,
-        ]),
+        ...(state.decisionLedger ?? []).filter((decision) => decision.status === "resolved").flatMap((decision) => {
+            const selected = decision.options.find((option) => option.id === decision.selectedOptionId);
+            return [decision.id, decision.question, decision.selectedOptionId ?? "", decision.selectedOptionLabel ?? "", selected?.impact ?? ""];
+        }),
     ].join("\n");
 }
 async function compactArchitectureEvidence(root, scopeId) {
@@ -1345,7 +1408,7 @@ export async function review(input) {
                 summary: checkpoint.summary,
                 sections: Object.fromEntries(Object.entries(allSections).filter(([heading]) => owned.has(heading))),
                 ambiguityResolution: checkpoint.ambiguityResolution,
-            }), ...validateHumanDecisionContract(state, stage, allSections, checkpoint.decisionItems ?? []),
+            }), ...validateHumanDecisionContract(state, stage, allSections, checkpoint.decisionItems ?? [], checkpoint.summary),
             ...validateExternalPartyEvidence(state, stage, allSections)]
             .filter((finding) => finding.severity === "blocking");
         if (semanticBlockers.length)
@@ -1390,7 +1453,7 @@ export async function review(input) {
                 state.humanDecisions.push({
                     milestone: checkpoint.milestone, stage: checkpoint.stage, selectedCandidateId: item.selectedOptionId,
                     candidateLabel: item.selectedOptionLabel,
-                    resolvedDecisions: [item.question, ...item.blocks],
+                    resolvedDecisions: [item.question, item.selectedOptionLabel ?? item.selectedOptionId ?? ""].filter(Boolean),
                     deferredToTacticalFamilies: deferredRuleFamilies(document),
                     feedback: decisionFeedback,
                     reviewer: input.reviewer, decidedAt: now(),

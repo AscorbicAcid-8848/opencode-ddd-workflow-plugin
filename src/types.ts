@@ -15,6 +15,12 @@ export interface DecisionOption {
   impact?: string
 }
 
+export interface DecisionBlockTarget {
+  id: string
+  statement: string
+  documentSection: string
+}
+
 export interface DecisionItem {
   id: string
   ownerStage: string
@@ -22,7 +28,7 @@ export interface DecisionItem {
   options: DecisionOption[]
   recommendationId?: string
   status: "open" | "resolved" | "deferred" | "out-of-scope"
-  blocks: string[]
+  blocks: DecisionBlockTarget[]
   sourceRefs: string[]
   selectedOptionId?: string
   selectedOptionLabel?: string

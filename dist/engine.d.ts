@@ -46,7 +46,7 @@ export interface OpenSpecInput extends Identity {
 }
 export declare function requiresScenarioClarification(request: string): boolean;
 export declare function renderDecisionReviewSection(items: DecisionItem[]): string;
-export declare function validateHumanDecisionContract(state: WorkflowState, stage: any, sections: Record<string, string>, decisionItems: unknown): ValidationFinding[];
+export declare function validateHumanDecisionContract(state: WorkflowState, stage: any, sections: Record<string, string>, decisionItems: unknown, summary?: string): ValidationFinding[];
 export declare function validateExternalPartyEvidence(state: WorkflowState, stage: any, sections: Record<string, string>): ValidationFinding[];
 export declare function initialize(input: InitInput): Promise<Transition & {
     workflowId: string;

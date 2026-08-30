@@ -951,10 +951,47 @@ test("a structured recommended candidate remains non-authoritative until human r
   const findings = validateHumanDecisionContract({ originalRequest: "新增收藏店铺并按收藏时间查询" }, stage, sections, [{
     id: "DEC-FAVORITE-TIME", question: "收藏时间采用首次时间还是每次动作刷新？",
     options: [{ id: "TIME-FIRST", label: "保留首次收藏时间" }, { id: "TIME-REFRESH", label: "每次动作刷新时间" }],
-    recommendationId: "TIME-FIRST", status: "open", blocks: ["RULE-FAVORITE-TIME"],
+    recommendationId: "TIME-FIRST", status: "open", blocks: [{
+      id: "RULE-FAVORITE-TIME", statement: "收藏时间以首次收藏时刻为准", documentSection: "战略事件风暴",
+    }],
     sourceRefs: ["user-input:original-request"],
   }])
   assert.equal(findings.filter((finding) => finding.severity === "blocking").length, 0)
+})
+
+test("an open decision cannot place its blocked proposition into the authoritative main flow", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const sections = {
+    "一页结论": "重复收藏的业务结果由 DEC-DUP-01 决定，批准前不进入唯一结论。",
+    "战略事件风暴": "本次主流程确认重复收藏的业务结果为保留首次时间。",
+  }
+  const findings = validateHumanDecisionContract({}, stage, sections, [{
+    id: "DEC-DUP-01", question: "重复收藏如何处理？",
+    options: [{ id: "IDEMPOTENT", label: "保留首次时间" }, { id: "REFRESH", label: "刷新时间" }],
+    recommendationId: "IDEMPOTENT", status: "open",
+    blocks: [{ id: "RULE-DUP-01", statement: "重复收藏的业务结果", documentSection: "战略事件风暴" }],
+    sourceRefs: ["user-input:original-request"],
+  }])
+  assert.ok(findings.some((finding) => finding.code === "OPEN_DECISION_BLOCKED_TARGET_ASSERTED"))
+})
+
+test("decision block targets reject the legacy free-form string schema", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const findings = validateHumanDecisionContract({}, stage, { "战略事件风暴": "重复分支尚未决定。" }, [{
+    id: "DEC-DUP-01", question: "重复收藏如何处理？",
+    options: [{ id: "IDEMPOTENT", label: "保留首次时间" }, { id: "REFRESH", label: "刷新时间" }],
+    recommendationId: "IDEMPOTENT", status: "open",
+    blocks: ["RULE-DUP-01: 重复收藏的业务结果"], sourceRefs: ["user-input:original-request"],
+  }])
+  assert.ok(findings.some((finding) => finding.code === "DECISION_BLOCK_TARGET_SCHEMA_REQUIRED"))
+})
+
+test("a decision deferred in prose must still be registered with a decision id", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const findings = validateHumanDecisionContract({}, stage, {
+    "战略事件风暴": "同一收藏时间下的稳定次序需在后续用例阶段定义。",
+  }, [])
+  assert.ok(findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"))
 })
 
 test("a downstream milestone cannot reopen an already resolved decision id", () => {
@@ -963,7 +1000,9 @@ test("a downstream milestone cannot reopen an already resolved decision id", () 
     originalRequest: "新增收藏店铺并按收藏时间查询",
     decisionLedger: [{ id: "DEC-FAVORITE-TIME", ownerStage: "02-big-picture-event-storm", question: "收藏时间语义",
       options: [{ id: "TIME-FIRST", label: "首次时间" }, { id: "TIME-REFRESH", label: "刷新时间" }],
-      recommendationId: "TIME-FIRST", status: "resolved", blocks: ["RULE-FAVORITE-TIME"],
+      recommendationId: "TIME-FIRST", status: "resolved", blocks: [{
+        id: "RULE-FAVORITE-TIME", statement: "收藏时间以首次收藏时刻为准", documentSection: "战略事件风暴",
+      }],
       sourceRefs: ["user-input:original-request"], selectedOptionId: "TIME-FIRST", selectedOptionLabel: "首次时间" }],
   }
   const findings = validateHumanDecisionContract(state, stage, {
@@ -972,7 +1011,9 @@ test("a downstream milestone cannot reopen an already resolved decision id", () 
   }, [{
     id: "DEC-FAVORITE-TIME", question: "是否改变收藏时间语义？",
     options: [{ id: "TIME-FIRST", label: "首次时间" }, { id: "TIME-REFRESH", label: "刷新时间" }],
-    recommendationId: "TIME-FIRST", status: "open", blocks: ["RULE-FAVORITE-TIME"],
+    recommendationId: "TIME-FIRST", status: "open", blocks: [{
+      id: "RULE-FAVORITE-TIME", statement: "改变收藏时间语义", documentSection: "实现单元用例包",
+    }],
     sourceRefs: ["decision:DEC-FAVORITE-TIME"],
   }])
   assert.ok(findings.some((finding) => finding.code === "DECISION_ALREADY_RESOLVED"))
