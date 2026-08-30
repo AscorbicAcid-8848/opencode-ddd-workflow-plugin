@@ -26,6 +26,9 @@ const DECISION_NON_AUTHORITATIVE_HEADINGS = new Set([
 ]);
 const OPEN_DECISION_LANGUAGE = /[？?]|\bTBD\b|(?:待|尚待|仍待|有待|留待|未决|未定|未明确|未解决|不确定|不明确|未知|开放|悬而未决|保留)[^。；\n]{0,48}(?:问题|事项|决策|规则|语义|行为|条件|结果|方向|范围|约束|定义|处理|确认|决定|选择|澄清|细化|回答|解决)|(?:问题|事项|决策|规则|语义|行为|条件|结果|方向|范围|约束)[^。；\n]{0,48}(?:开放|未决|未定|待(?:确认|决定|定义|处理|澄清|细化|回答|解决)|尚未(?:确认|决定|定义|处理|澄清|细化|回答|解决)|不确定|不明确|保留)|(?:仍|尚)?(?:需|需要|必须)(?:在|由)?[^。；\n]{0,42}(?:确认|决定|定义|澄清|选择|细化|回答|解决)|(?:留待|交由|后续|下一阶段|稍后|未来)[^。；\n]{0,48}(?:确认|决定|定义|澄清|选择|细化|回答|解决|问题|约束|规则|语义|行为|处理|保留)|(?:未|尚未)[^。；\n]{0,32}(?:给出|规定|明确|确定|回答|解决)|还是/u;
 const OPTION_DEFERRAL_LANGUAGE = /(?:延期|推迟|稍后|留待|后续(?:阶段|里程碑|版本|处理|实现)|未来候选|范围外|不(?:纳入|包含|属于)本次)/u;
+const OPEN_DECISION_NON_ASSERTIVE_LANGUAGE = /(?:候选|待确认|等待确认|尚未确认|未决定|未决|不确定|开放问题|人工批准前|不进入唯一(?:主流程|结论)|不具有权威性|由\s*DEC-[A-Za-z0-9._-]+\s*决定)/iu;
+const TARGET_BUSINESS_RULE_LANGUAGE = /(?:必须|不得|只能|仅(?:能|可|限于|返回|展示|允许|包含|保留|属于)|只(?:能|允许|返回|展示|查看|包含|保留|属于)|保证|确保|禁止|拒绝|幂等|无需补偿|无须补偿|可安全重试|不(?:发生|改变|暴露|产生|创建|制造)[^。；\n]{0,36}|(?:失败|不存在|无效|失效|重复|并发|超时)[^。；\n]{0,32}(?:拒绝|返回|保持|重试|补偿|刷新|保留|不应|不得)|(?:采用|按照|按)[^。；\n]{0,24}(?:处理|返回|排序|记录)|由系统[^。；\n]{0,30}记录|可被引用|稳定可复现|稳定且可重复|\b(?:must|shall|only|reject|idempotent|retry|compensat(?:e|ion)|ensure|guarantee)\b)/iu;
+const BASELINE_AUTHORITY_REFERENCE = /\b(?:FACT|COMPAT)-[A-Za-z0-9._-]+\b/u;
 function canonicalDecisionText(value) {
     return value.normalize("NFKC").toLocaleLowerCase()
         .replace(/[\s“”‘’'"`，。；：:、！？!?（）()【】\[\]{}]/gu, "");
@@ -34,6 +37,17 @@ function authoritativeDecisionText(sections, summary = "") {
     return [summary, ...Object.entries(sections)
             .filter(([heading]) => !DECISION_NON_AUTHORITATIVE_HEADINGS.has(heading))
             .map(([, value]) => value)].filter(Boolean).join("\n");
+}
+function directlyRestatesOriginalRequest(line, request) {
+    const lineText = canonicalDecisionText(line.replace(/\b(?:DEC|RULE|SCOPE|FACT|COMPAT)-[A-Za-z0-9._-]+\b/gu, ""));
+    const requestText = canonicalDecisionText(request);
+    if (lineText.length < 6 || requestText.length < 6)
+        return false;
+    if (lineText === requestText)
+        return true;
+    if (requestText.includes(lineText))
+        return true;
+    return lineText.includes(requestText) && lineText.length <= Math.ceil(requestText.length * 1.35);
 }
 function groupDecisionEntries(entries) {
     const grouped = new Map();
@@ -255,6 +269,39 @@ export function validateHumanDecisionContract(state, stage, sections, decisionIt
             code: "DECISION_REFERENCE_WITHOUT_BLOCK_TARGET", path: entryPath, severity: "blocking",
             message: `正文引用了 decision id，却没有在同一行引用其具体 block target id：${entries.slice(0, 3).map((entry) => entry.line).join("；")}。`,
         });
+    if (stage.scopeContract?.id === "system-discovery") {
+        const openOptionAssertions = decisionProseEntries.filter(({ line }) => TARGET_BUSINESS_RULE_LANGUAGE.test(line)
+            && !OPEN_DECISION_NON_ASSERTIVE_LANGUAGE.test(line)
+            && items.some((item) => item.status === "open" && line.includes(item.id)
+                && item.blocks.some((block) => line.includes(block.id))));
+        for (const [entryPath, entries] of groupDecisionEntries(openOptionAssertions))
+            findings.push({
+                code: "OPEN_DECISION_OPTION_ASSERTED", path: entryPath, severity: "blocking",
+                message: `正文虽然引用了 DEC-ID/BLOCK-ID，却已把开放决策的一个选项写成当前规则：${entries.slice(0, 3).map((entry) => entry.line).join("；")}。批准前只能写“待确认/候选”，选项与推荐只放在运行时审核区或建议区。`,
+            });
+        const resolvedDecisionIds = new Set((state.decisionLedger ?? [])
+            .filter((item) => item.status === "resolved").map((item) => item.id));
+        const untrackedTargetRules = decisionProseEntries.filter(({ line }) => {
+            if (!TARGET_BUSINESS_RULE_LANGUAGE.test(line) || OPEN_DECISION_LANGUAGE.test(line)
+                || OPEN_DECISION_NON_ASSERTIVE_LANGUAGE.test(line))
+                return false;
+            if (BASELINE_AUTHORITY_REFERENCE.test(line))
+                return false;
+            if ([...resolvedDecisionIds].some((id) => line.includes(id)))
+                return false;
+            if (items.some((item) => line.includes(item.id)
+                && item.blocks.some((block) => line.includes(block.id))))
+                return false;
+            if (/\bDEC-[A-Za-z0-9._-]+\b/u.test(line))
+                return false;
+            return !directlyRestatesOriginalRequest(line, state.originalRequest ?? "");
+        });
+        for (const [entryPath, entries] of groupDecisionEntries(untrackedTargetRules))
+            findings.push({
+                code: "UNTRACKED_TARGET_BUSINESS_RULE", path: entryPath, severity: "blocking",
+                message: `战略事件风暴正文新增了没有权威来源的规范性业务规则：${entries.slice(0, 3).map((entry) => entry.line).join("；")}。若它不是原始需求的直接复述或带 FACT/COMPAT 的现状事实，必须登记为 DEC-ID/BLOCK-ID，并在人工批准前保持待确认。`,
+            });
+    }
     return findings;
 }
 export function validateExternalPartyEvidence(state, stage, sections) {
@@ -412,6 +459,13 @@ export async function prepare(input) {
                     "把候选查询、记录、时间或权限规则写成已批准需求",
                     "主动扩展匿名访问、历史保留、补偿、推荐分析或跨时区等邻接需求，除非原始请求或现状证据明确要求",
                 ],
+            },
+        } : {}),
+        ...(stage.scopeContract?.id === "system-discovery" ? {
+            targetBusinessRuleAuthority: {
+                rule: "战略事件风暴只能发布三类业务结论：原始请求的直接复述、带 FACT/COMPAT 引用的现状事实、已由人工解决的上游决策。除此之外，异常结果、资格条件、所有权、幂等、时间、补偿、重试或范围取舍等规范性规则都必须登记为 decisionItems 的 DEC-ID/BLOCK-ID。",
+                openDecisionRule: "开放 DEC/BLOCK 在权威正文只能写成‘待确认/候选’，不得提前写入推荐选项；选项与建议仅进入运行时审核区或‘备选解释与建议’。",
+                failureMeaning: "违反时 complete-stage 返回 OPEN_DECISION_OPTION_ASSERTED 或 UNTRACKED_TARGET_BUSINESS_RULE；修正当前候选后重提，不推进状态。",
             },
         } : {}),
         unfilledSectionHeadings: milestoneMissing.filter((heading) => allowedSectionHeadings.includes(heading)),

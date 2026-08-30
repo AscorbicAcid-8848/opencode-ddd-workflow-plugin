@@ -1324,6 +1324,53 @@ test("an open decision cannot place its blocked proposition into the authoritati
   assert.ok(findings.some((finding) => finding.code === "OPEN_DECISION_BLOCKED_TARGET_ASSERTED"))
 })
 
+test("an open decision cannot assert one option merely by citing its decision and block ids", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const findings = validateHumanDecisionContract(
+    { originalRequest: "新增用户收藏店铺功能" },
+    stage,
+    { "战略事件风暴": "DEC-DUP-01/RULE-DUP-01：重复收藏按幂等处理。" },
+    [{
+      id: "DEC-DUP-01", question: "重复收藏如何处理？",
+      options: [{ id: "IDEMPOTENT", label: "按幂等处理" }, { id: "REJECT", label: "拒绝重复收藏" }],
+      recommendationId: "IDEMPOTENT", status: "open",
+      blocks: [{ id: "RULE-DUP-01", statement: "重复收藏处理规则", documentSection: "战略事件风暴" }],
+      sourceRefs: ["user-input:original-request"],
+    }],
+  )
+  assert.ok(findings.some((finding) => finding.code === "OPEN_DECISION_OPTION_ASSERTED"))
+})
+
+test("authoritative target business rules beyond the request require a decision binding", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  for (const rule of [
+    "店铺不存在时拒绝收藏。",
+    "保存失败不得宣称成功，重试不产生多条关系。",
+  ]) {
+    const findings = validateHumanDecisionContract(
+      { originalRequest: "新增用户收藏店铺功能" },
+      stage,
+      { "战略事件风暴": rule },
+      [],
+    )
+    assert.ok(findings.some((finding) => finding.code === "UNTRACKED_TARGET_BUSINESS_RULE"), rule)
+  }
+})
+
+test("request-owned rules and advisory suggestions do not require a decision binding", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const findings = validateHumanDecisionContract(
+    { originalRequest: "新增用户收藏店铺功能；店铺不存在时拒绝收藏" },
+    stage,
+    {
+      "战略事件风暴": "店铺不存在时拒绝收藏。",
+      "备选解释与建议": "建议保存失败不得宣称成功，重试不产生多条关系。",
+    },
+    [],
+  )
+  assert.ok(!findings.some((finding) => finding.code === "UNTRACKED_TARGET_BUSINESS_RULE"))
+})
+
 test("decision block targets reject the legacy free-form string schema", () => {
   const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
   const findings = validateHumanDecisionContract({}, stage, { "战略事件风暴": "重复分支尚未决定。" }, [{
