@@ -254,7 +254,7 @@ const DDD_CODE_AGENT_ID = "ddd-coding";
 const DDD_COMMAND_TEMPLATE = [
     "Load `ddd-orchestrate` and treat the text below as the immutable original request.",
     "Use only `ddd_lifecycle`. Every input/sections/observations value must be a native object or array, never a JSON string. For an existing-system evidence stage call action=evidence-bundle once after prepare with 2-6 likely source identifiers; prefer short symbols such as Shop/User/Controller over invented compound class names. Do not use repository or shell exploration. For every stage call action=complete-stage once with every allowed heading. Continue until human review, a real block, archive, or completion.",
-    "complete-stage owns claim bookkeeping and atomic publication. Submit the full stage once. If it returns draft.saved=true, repair only findings.path sections; never resend unchanged sections. If draft.retryableByModel=false, stop and report the block. At milestone V submit one structured openspec-plan, then call complete-stage with empty input; the runtime compiles all OpenSpec and milestone-V Markdown.",
+    "complete-stage owns claim bookkeeping and atomic publication. Submit the full stage once. If it returns draft.saved=true, obey draft.repairContract: repair only editablePaths; when replaceObservations=true resend one complete observations array, otherwise do not resend unchanged sections. If draft.retryableByModel=false, stop and report the block. At milestone V submit one structured openspec-plan, then call complete-stage with empty input; the runtime compiles all OpenSpec and milestone-V Markdown.",
     "Keep total section text between qualityContract.minTotalChars and targetMaxTotalChars. Omit observations when stageCard has no claimContract. Do not narrate plans between tool calls. Treat the evidence bundle as complete; record anything outside it as evidence-gap/open-question. At a human gate output transition.message and stop.",
     "",
     "$ARGUMENTS",
@@ -419,6 +419,7 @@ const lifecycleTool = tool({
                 const metadata = lifecycleFinalizeMetadata(i);
                 return out(await submit({ ...id, stage, summary, sections,
                     claims: observations.map((item) => claimFromObservation(stage, String(item?.heading ?? ""), item)),
+                    replaceClaims: Array.isArray(i.observations),
                     ambiguityResolution: i.ambiguityResolution,
                     finalize: true, ...metadata }));
             }

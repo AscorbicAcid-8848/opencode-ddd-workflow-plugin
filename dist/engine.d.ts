@@ -16,6 +16,8 @@ export interface SubmitInput extends Identity {
     plannedSlices?: number;
     sliceId?: string;
     finalize?: boolean;
+    /** A lifecycle observations payload is a complete claim set, not a patch. */
+    replaceClaims?: boolean;
 }
 export interface ReviewInput extends Identity {
     stage: string;

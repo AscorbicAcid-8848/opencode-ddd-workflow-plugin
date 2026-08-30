@@ -229,6 +229,25 @@ test("model contract extraction accepts a typed embedded JSON contract", () => {
   assert.deepEqual(contract.invariants, [{ id: "INV-01", statement: "同一用户同店同日最多一条访问事实" }])
 })
 
+test("model contract extraction accepts inline-code ids, method signatures, events, and semicolon invariants", () => {
+  const document = [
+    "`ME-01 Favorite` 是聚合根，身份为 `ME-02 FavoriteKey(UserId, ShopId)`，状态含不可变 `ME-03 FavoritedAt`。",
+    "`ME-04 FavoriteShop.handle({userId, shopId})` 与 `ME-05 ListFavoriteShops.handle({userId})` 是应用服务。",
+    "`ME-06 FavoriteRepository.find(FavoriteKey)`、`ME-07 FavoriteReadRepository.listByUser(UserId)` 是仓储端口。",
+    "`ME-08 ShopCatalogPort.findAvailable(shopId)` 与 `ME-10 IdentityPort.requireRecognized(userId)` 是上游端口。",
+    "`ME-09 ShopFavorited {userId, shopId, favoritedAt}` 是领域事件。",
+    "`INV-01` 同一 FavoriteKey 至多一个聚合；`INV-02` FavoritedAt 创建后不可变；`INV-03` 事件只产生一次；",
+    "`INV-04` 查询必须按 UserId 隔离；`INV-05` 最近优先稳定排序；`INV-06` 提交后立即可见。",
+  ].join("\n")
+  const contract = extractApprovedModelContract(document)
+  assert.deepEqual(contract.modelElements.map((item) => item.id), [
+    "ME-01", "ME-02", "ME-03", "ME-04", "ME-05", "ME-06", "ME-07", "ME-08", "ME-09", "ME-10",
+  ])
+  assert.deepEqual(contract.invariants.map((item) => item.id), [
+    "INV-01", "INV-02", "INV-03", "INV-04", "INV-05", "INV-06",
+  ])
+})
+
 test("refactor milestone IV approval materializes Chinese typed model names without a format-only revision", async () => {
   const dir = await freshProject()
   try {
@@ -1041,6 +1060,34 @@ test("blocking stage draft is saved, repaired incrementally, and fused after rep
     }
     assert.equal(failed.draft.repeatedFindingSet, 3)
     assert.equal(failed.draft.retryableByModel, false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("claim-only repair atomically replaces stale claims and maps them into the saved draft", async () => {
+  const dir = await freshProject()
+  try {
+    await initialize({ workflowType: "add-feature", workflowId: "claim-repair", projectRoot: dir,
+      title: "t", request: "新增收藏店铺查询" })
+    const payload = baselinePayload()
+    const stale = structuredClone(payload.claims)
+    stale[0].statement = `${stale[0].statement}（旧表述）`
+    stale[0].id = "FACT-STALE"
+    const failed = await submit({ workflowType: "add-feature", workflowId: "claim-repair", projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, sections: payload.sections, claims: stale })
+    assert.ok(failed.findings.some((finding) => finding.code === "CLAIM_NOT_MAPPED_TO_DOCUMENT"))
+    assert.equal(failed.draft.repairContract.replaceObservations, true)
+    assert.ok(failed.draft.repairContract.editablePaths.includes("claims[0].statement"))
+
+    const repairedClaims = structuredClone(payload.claims)
+    repairedClaims[0].id = "FACT-REPAIRED"
+    repairedClaims[0].documentSection = "证据与追踪"
+    const repaired = await submit({ workflowType: "add-feature", workflowId: "claim-repair", projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, sections: {}, claims: repairedClaims,
+      replaceClaims: true })
+    assert.equal(repaired.findings.filter((finding) => finding.severity === "blocking").length, 0)
+    assert.equal(repaired.lastCompletedStage, "01-current-evidence")
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

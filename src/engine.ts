@@ -24,6 +24,8 @@ export interface SubmitInput extends Identity {
   plannedSlices?: number
   sliceId?: string
   finalize?: boolean
+  /** A lifecycle observations payload is a complete claim set, not a patch. */
+  replaceClaims?: boolean
 }
 export interface ReviewInput extends Identity { stage: string; decision: ReviewDecision; reviewer: string; feedback?: string; resolution?: HumanDecisionResolution }
 export interface StatusInput extends Identity { view?: "compact" | "full" }
@@ -297,11 +299,46 @@ function mergeClaims(current: unknown, increment: unknown, replacedHeadings: Set
 async function mergeStageDraft(root: string, input: SubmitInput): Promise<SubmitInput> {
   const file = stageDraftPath(root, input.stage)
   const draft = await exists(file) ? await readJson<StageDraft>(file) : undefined
+  const sections = { ...(draft?.sections ?? {}), ...(input.sections ?? {}) }
+  // A final-stage Markdown repair must not silently delete the structured
+  // claims owned by the section being edited. Partial section authoring still
+  // replaces that section's claims, while a lifecycle observations payload is
+  // explicitly the complete replacement set.
+  const replacedHeadings = input.finalize === false
+    ? new Set(Object.keys(input.sections ?? {}))
+    : new Set<string>()
+  const rawClaims = input.replaceClaims && Array.isArray(input.claims)
+    ? input.claims
+    : mergeClaims(draft?.claims, input.claims, replacedHeadings)
+  const claims = Array.isArray(rawClaims) ? rawClaims.map((claim: any) => ({ ...claim })) : rawClaims
+
+  if (input.replaceClaims && Array.isArray(claims)) {
+    const missingByHeading = new Map<string, string[]>()
+    for (const claim of claims) {
+      const statement = String(claim?.statement ?? "").trim()
+      if (!statement) continue
+      const owners = Object.entries(sections).filter(([, content]) => content.includes(statement))
+      if (owners.length === 1) {
+        claim.documentSection = owners[0][0]
+        continue
+      }
+      const heading = String(claim?.documentSection ?? "").trim()
+      if (owners.length === 0 && heading && Object.hasOwn(sections, heading)) {
+        missingByHeading.set(heading, [...(missingByHeading.get(heading) ?? []), statement])
+      }
+    }
+    for (const [heading, statements] of missingByHeading) {
+      const unique = [...new Set(statements)].filter((statement) => !sections[heading].includes(statement))
+      if (unique.length) {
+        sections[heading] = `${sections[heading].trim()}\n\n### 结构化结论\n${unique.map((statement) => `- ${statement}`).join("\n")}`
+      }
+    }
+  }
   return {
     ...input,
     summary: input.summary || draft?.summary || "",
-    sections: { ...(draft?.sections ?? {}), ...(input.sections ?? {}) },
-    claims: mergeClaims(draft?.claims, input.claims, new Set(Object.keys(input.sections ?? {}))),
+    sections,
+    claims,
     ambiguityResolution: input.ambiguityResolution ?? draft?.ambiguityResolution,
     plannedSlices: input.plannedSlices ?? draft?.plannedSlices,
     sliceId: input.sliceId ?? draft?.sliceId,
@@ -342,6 +379,9 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
     const signature = findings.filter((finding) => finding.severity === "blocking")
       .map((finding) => `${finding.code}:${finding.path}`).sort().join("|")
     const repeated = previous?.validation?.signature === signature ? previous.validation.repeated + 1 : 1
+    const editablePaths = [...new Set(findings.filter((finding) => finding.severity === "blocking")
+      .map((finding) => finding.path))]
+    const replaceObservations = editablePaths.some((item) => item === "claims" || item.startsWith("claims["))
     const allowedHeadings = new Set(writableHeadingsForStage(stage))
     const safeSections = Object.fromEntries(Object.entries(merged.sections ?? {})
       .filter(([heading]) => allowedHeadings.has(heading)))
@@ -360,8 +400,11 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
       draft: {
         saved: true, repairOnly: true, repeatedFindingSet: repeated,
         retryableByModel: repeated < 3,
+        repairContract: { editablePaths, replaceObservations, preserveOtherSections: true },
         nextAction: repeated < 3
-          ? "候选稿已保存。下一次只提交 findings.path 指向的章节和必要元数据，不要重写整篇文档。"
+          ? replaceObservations
+            ? "候选稿已保存。只修复 editablePaths；重新提交一份完整 observations 数组，运行时会原子替换旧 claims，并保留未点名的正文。"
+            : "候选稿已保存。下一次只提交 editablePaths 指向的正文或必要元数据，不要重写整篇文档。"
           : "相同阻塞项已连续出现 3 次。停止自动重试并报告阻塞，避免继续消耗 Token。",
       },
     }
@@ -736,17 +779,20 @@ export function extractApprovedModelContract(document: string) {
   for (const match of text.matchAll(/\b(ME-\d+)\b/gu)) {
     const id = match[1]
     const rawTail = text.slice((match.index ?? 0) + match[0].length, (match.index ?? 0) + match[0].length + 140)
-    const clause = rawTail.split(/[；;。|\n]/u, 1)[0].trim()
+    // Identifiers are frequently wrapped independently in Markdown, for
+    // example `` `ME-04` FavoriteShop.handle(...) ``. Remove only that closing
+    // marker; the following definition still has to match a trusted shape.
+    const clause = rawTail.split(/[；;。|\n]/u, 1)[0].replace(/^\s*[`*]{1,2}\s*/u, "").trim()
     if (!clause || /^[\/、,，→]/u.test(clause)) continue
     const quoted = clause.match(/^\s*(?:[：:]\s*)?[`*]{1,2}([^`*]{2,80})[`*]{1,2}/u)?.[1]
     const typedSuffix = clause.match(new RegExp(`^\\s*(?:[：:]\\s*)?[\`*]{0,2}([\\p{L}_][\\p{L}\\p{N}_.\\- ]{1,79}?)[\`*]{0,2}\\s*(?:${kinds})(?=[：:\\s，,]|$)`, "u"))?.[1]
     const typedPrefix = clause.match(new RegExp(`^\\s*(?:[：:]\\s*)?(?:${kinds})\\s*[\`*]{0,2}([\\p{L}_][\\p{L}\\p{N}_.\\- ]{1,79})[\`*]{0,2}(?=[：:\\s，,]|$)`, "u"))?.[1]
-    const colonName = clause.match(/^\s*[：:]\s*[`*]{0,2}([\p{L}_][\p{L}\p{N}_.\-]{1,79})[`*]{0,2}(?=[：:\s，,]|$)/u)?.[1]
-    const asciiName = clause.match(/^\s*(?:[：:]\s*)?[`*]{0,2}([A-Za-z][A-Za-z0-9_.\-]{1,79})[`*]{0,2}(?=[：:\s，,]|$)/u)?.[1]
+    const colonName = clause.match(/^\s*[：:]\s*[`*]{0,2}([\p{L}_][\p{L}\p{N}_.\-]{1,79})[`*]{0,2}(?=[：:\s，,({]|$)/u)?.[1]
+    const asciiName = clause.match(/^\s*(?:[：:]\s*)?[`*]{0,2}([A-Za-z][A-Za-z0-9_.\-]{1,79})[`*]{0,2}(?=[：:\s，,({]|$)/u)?.[1]
     const name = String(quoted ?? typedSuffix ?? typedPrefix ?? colonName ?? asciiName ?? "").trim()
     if (name && !/^(?:的|由|与|和|及|在|位于|用于|依赖|保护|覆盖|对应)/u.test(name)) modelElements.push({ id, name })
   }
-  invariantMatches.push(...[...text.matchAll(/\b(INV-\d+)(?:\s*[：:]\s*|\s+)([^|\n。；]{3,180})/gu)]
+  invariantMatches.push(...[...text.matchAll(/\b(INV-\d+)\b[`*]{0,2}(?:\s*[：:]\s*|\s+)([^|\n。；]{3,180})/gu)]
     .map((match) => ({ id: match[1], statement: match[2].replace(/[`*_]/gu, "").trim() })))
   const firstModels = new Map<string, { id: string; name: string }>()
   for (const item of modelElements) if (!firstModels.has(item.id)) firstModels.set(item.id, item)
