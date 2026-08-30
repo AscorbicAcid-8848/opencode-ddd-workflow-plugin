@@ -552,6 +552,18 @@ function baselinePayload(overrides = {}) {
   }
 }
 
+function milestoneIDecisionItems() {
+  return [{
+    id: "DEC-TRIGGER", question: "本次业务场景由参与者主动发起，还是由外部事实触发？",
+    options: [{ id: "candidate-a", label: "参与者主动发起" }, { id: "candidate-b", label: "外部事实触发" }],
+    recommendationId: "candidate-a", status: "open",
+    blocks: [{
+      id: "SCN-TRIGGER-01", statement: "本次主流程由参与者主动发起", documentSection: "战略事件风暴",
+    }],
+    sourceRefs: ["user-input:original-request"],
+  }]
+}
+
 async function completeMilestoneI(dir, workflowId) {
   await submit({
     workflowType: "add-feature", workflowId, projectRoot: dir,
@@ -560,9 +572,10 @@ async function completeMilestoneI(dir, workflowId) {
   })
   const p = await prepare({ workflowType: "add-feature", workflowId, projectRoot: dir, stage: "02-big-picture-event-storm" })
   assert.deepEqual(p.stageCard.skills, ["ddd-scope", "ddd-discover"])
-  const requiredConcepts = p.stageCard.qualityContract.requiredContent.join("、")
+  const requiredConcepts = p.stageCard.qualityContract.requiredContent
+    .map((concept) => `### ${concept}\n该业务分析维度已覆盖。`).join("\n\n")
   const sections = Object.fromEntries(p.stageCard.unfilledSectionHeadings.map((heading) => [heading,
-    `### ${heading}结论\n围绕用户目标梳理业务参与者、命令、已经发生的业务事件、规则、异常、补偿、时间约束、读模型和边界线索。本次目标与未来候选明确分离，未决问题不会进入主流程。阶段概念覆盖：${requiredConcepts}。`]))
+    `### ${heading}结论\n围绕用户目标梳理业务参与者、命令、已经发生的业务事件、规则、异常、补偿、时间约束、读模型和边界线索。本次目标与未来候选明确分离，结构化决策账本中的事项不会进入主流程。\n\n${requiredConcepts}`]))
   if (p.stageCard.ambiguityContract) {
     sections["战略事件风暴"] += "\n\n候选场景 A：参与者发起业务动作后形成候选业务事件。\n候选场景 B：外部业务事实到达后形成另一条候选事件流。\n人工确认前，任何候选均不进入本次目标或主流程。"
   }
@@ -574,7 +587,7 @@ async function completeMilestoneI(dir, workflowId) {
       candidates: [{ id: "candidate-a", label: "参与者主动发起" }, { id: "candidate-b", label: "外部事实触发" }],
       affectedDecisions: ["触发条件", "业务结果", "异常与规则"],
       recommendedCandidateId: "candidate-a",
-    } } : {}),
+    }, decisionItems: milestoneIDecisionItems() } : { decisionItems: [] }),
   })
 }
 
@@ -993,7 +1006,7 @@ test("a structured recommended candidate remains non-authoritative until human r
   const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
   const sections = {
     "本次请您确认": "收藏时间采用首次时间，还是每次动作刷新？推荐 TIME-FIRST。",
-    "战略事件风暴": "候选 TIME-FIRST 与 TIME-REFRESH 并列；DEC-TIME blocks 收藏时间规则，人工批准前不进入唯一主流程。",
+    "战略事件风暴": "候选 TIME-FIRST 与 TIME-REFRESH 并列；DEC-TIME/RULE-FAVORITE-TIME blocks 收藏时间规则，人工批准前不进入唯一主流程。",
     "备选解释与建议": "推荐 TIME-FIRST，因为重复意图不会改变既有收藏事实。",
   }
   const findings = validateHumanDecisionContract({ originalRequest: "新增收藏店铺并按收藏时间查询" }, stage, sections, [{
@@ -1040,6 +1053,28 @@ test("a decision deferred in prose must still be registered with a decision id",
     "战略事件风暴": "同一收藏时间下的稳定次序需在后续用例阶段定义。",
   }, [])
   assert.ok(findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"))
+})
+
+test("open-problem language cannot disappear without a typed deferred decision", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const findings = validateHumanDecisionContract({}, stage, {
+    "热点与边界线索": "查询分页与店铺失效后的展示行为均保持为开放问题。",
+  }, [])
+  assert.ok(findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"))
+})
+
+test("a prose decision reference must cite its concrete block target", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const findings = validateHumanDecisionContract({}, stage, {
+    "热点与边界线索": "店铺后来失效后的展示行为仍由 DEC-SHOP-ELIGIBILITY 决定。",
+  }, [{
+    id: "DEC-SHOP-ELIGIBILITY", question: "当前无法识别的店铺能否收藏？",
+    options: [{ id: "REJECT", label: "拒绝" }, { id: "ALLOW", label: "允许" }],
+    recommendationId: "REJECT", status: "open",
+    blocks: [{ id: "RULE-CURRENT-SHOP", statement: "当前无法识别的店铺不可收藏", documentSection: "热点与边界线索" }],
+    sourceRefs: ["user-input:original-request"],
+  }])
+  assert.ok(findings.some((finding) => finding.code === "DECISION_REFERENCE_WITHOUT_BLOCK_TARGET"))
 })
 
 test("a downstream milestone cannot reopen an already resolved decision id", () => {
@@ -2056,7 +2091,7 @@ test("review revise bypasses approval validation and a corrected resubmit restor
         status: "unresolved",
         candidates: [{ id: "candidate-a", label: "参与者主动发起" }, { id: "candidate-b", label: "外部事实触发" }],
         affectedDecisions: ["触发条件", "业务结果", "异常与规则"],
-      } })
+      }, decisionItems: milestoneIDecisionItems() })
     assert.equal(resubmitted.workflowStatus, "active")
     assert.equal(resubmitted.requiredAction, "await-human-review")
     const resubmittedDoc = await readFile(docPath, "utf8")

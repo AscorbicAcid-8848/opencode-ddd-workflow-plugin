@@ -24,6 +24,7 @@ const DECISION_SOURCE_PREFIX = /^(?:user-input|code|schema|test|runtime|openspec
 const DECISION_NON_AUTHORITATIVE_HEADINGS = new Set([
     "本次请您确认", "备选解释与建议", "备选战略方案与建议", "证据与追踪", "业务验收记录",
 ]);
+const OPEN_DECISION_LANGUAGE = /[？?]|\bTBD\b|(?:待|尚待|仍待|有待|留待|未决|未定|未明确|未解决|不确定|不明确|未知|开放|悬而未决|保留)[^。；\n]{0,42}(?:问题|事项|决策|规则|语义|行为|条件|结果|方向|范围|定义|处理|确认|决定|选择|澄清|细化)|(?:问题|事项|决策|规则|语义|行为|条件|结果|方向|范围)[^。；\n]{0,42}(?:开放|未决|未定|待(?:确认|决定|定义|处理|澄清|细化)|尚未(?:确认|决定|定义|处理|澄清|细化)|不确定|不明确)|(?:仍|尚)?需(?:在|由)?[^。；\n]{0,36}(?:确认|决定|定义|澄清|选择|细化)|(?:留待|交由|后续|下一阶段|稍后)[^。；\n]{0,36}(?:确认|决定|定义|澄清|选择|细化)|还是/u;
 function canonicalDecisionText(value) {
     return value.normalize("NFKC").toLocaleLowerCase()
         .replace(/[\s“”‘’'"`，。；：:、！？!?（）()【】\[\]{}]/gu, "");
@@ -200,16 +201,24 @@ export function validateHumanDecisionContract(state, stage, sections, decisionIt
                 message: `决策 ${item.id} 已在上游解决，当前阶段只能通过 decision:${item.id} 引用其结果；如需改变必须退回 ownerStage。`,
             });
     }
-    const trackedIds = items.map((item) => item.id);
-    const unresolvedLines = Object.entries(sections)
-        .filter(([heading]) => !["本次请您确认", "输入场景与现状事实", "备选解释与建议", "备选战略方案与建议", "证据与追踪", "业务验收记录"].includes(heading))
-        .flatMap(([, value]) => value.split(/\r?\n/u))
-        .filter((line) => /[？?]|待确认(?:[：:]|为|是|$)|尚未决定|\bTBD\b|还是|(?:仍|尚)?需(?:在|由)?[^。；\n]{0,36}(?:确认|决定|定义|澄清|选择|细化)|(?:留待|交由|后续|下一阶段|稍后)[^。；\n]{0,36}(?:确认|决定|定义|澄清|选择|细化)/u.test(line))
-        .filter((line) => !trackedIds.some((id) => line.includes(id)));
+    const decisionProseLines = [summary, ...Object.entries(sections)
+            .filter(([heading]) => heading !== "输入场景与现状事实" && !DECISION_NON_AUTHORITATIVE_HEADINGS.has(heading))
+            .map(([, value]) => value)]
+        .flatMap((value) => value.split(/\r?\n/u)).map((line) => line.trim())
+        .filter((line) => Boolean(line) && !/^#{1,6}\s/u.test(line));
+    const unresolvedLines = decisionProseLines
+        .filter((line) => OPEN_DECISION_LANGUAGE.test(line))
+        .filter((line) => !items.some((item) => line.includes(item.id) && item.blocks.some((block) => line.includes(block.id))));
     if (unresolvedLines.length)
         findings.push({
             code: "UNTRACKED_OPEN_DECISION", path: "sections", severity: "blocking",
-            message: `正文存在未登记或未引用 decision id 的开放问题：${unresolvedLines.slice(0, 3).join("；")}。`,
+            message: `正文存在未登记的开放/延期问题，或只引用了 decision id 而没有对应 block target id：${unresolvedLines.slice(0, 3).join("；")}。每行使用 DEC-ID/BLOCK-ID 绑定一个受影响结论。`,
+        });
+    const unboundReferences = decisionProseLines.filter((line) => items.some((item) => line.includes(item.id) && !item.blocks.some((block) => line.includes(block.id))));
+    if (unboundReferences.length)
+        findings.push({
+            code: "DECISION_REFERENCE_WITHOUT_BLOCK_TARGET", path: "sections", severity: "blocking",
+            message: `正文引用了 decision id，却没有在同一行引用其具体 block target id：${unboundReferences.slice(0, 3).join("；")}。`,
         });
     return findings;
 }
@@ -343,7 +352,7 @@ export async function prepare(input) {
         approvedHumanDecisions: state.humanDecisions ?? [],
         ...(stage.humanGate ? {
             humanDecisionContract: {
-                rule: "必须提交 decisionItems 数组；没有待选择、延期或排除事项时提交空数组。每个 open 决策使用稳定 id、2 至 4 个 options、recommendationId、blocks 和 sourceRefs。每个 block 是 {id,statement,documentSection}；statement 是批准后才可写入指定权威章节的精确业务命题，批准前只能出现在运行时审核区或备选建议。延期事项用 status=deferred 和 deferredToStage 登记。运行时独占生成‘本次请您确认’。",
+                rule: "必须提交 decisionItems 数组；没有待选择、延期或排除事项时提交空数组。每个 open 决策使用稳定 id、2 至 4 个 options、recommendationId、blocks 和 sourceRefs。每个 block 是 {id,statement,documentSection}；statement 是批准后才可写入指定权威章节的精确业务命题，批准前只能出现在运行时审核区或备选建议。权威正文若提到开放或延期问题，必须在同一行以 DEC-ID/BLOCK-ID 绑定一个 block target。延期事项用 status=deferred 和 deferredToStage 登记。运行时独占生成‘本次请您确认’。",
                 submitField: "complete-stage.input.decisionItems=[{id:'DEC-...',question:'...',options:[{id:'OPT-A',label:'...',impact:'...'},...],recommendationId:'OPT-A',status:'open',blocks:[{id:'RULE-01',statement:'重复收藏采用幂等且保留首次时间',documentSection:'战略事件风暴'}],sourceRefs:['user-input:original-request']}]",
                 approvalMeaning: "用户回复‘批准’接受每个 open 决策的唯一推荐 option；若某项无推荐，review.resolution.selections 必须逐项给出 decisionId→optionId。已解决的 decision id 不得在下游重开。",
             },

@@ -45,7 +45,7 @@ Repeat only while `requiredAction` is `continue` or `select-next-stage`:
 
 Use no repository/shell exploration in this stage. Copy `excerpt.ref` exactly into `evidence_refs`; cover `requiredCoverage`; packet-external knowledge is an `evidence-gap` or `open-question`, never a proposed table/model/API. Stay within `responseBudget`.
 
-4. Submit every allowed section in one valid JSON call. Values may use `###` subsections; the runtime also normalizes accidental nested `##` headings. At a modeling human gate, submit `decisionItems` for open, deferred, and out-of-scope decisions. Every block is `{id, statement, documentSection}`: `statement` is the exact conclusion that may enter that authoritative section only after approval, so before review it belongs only in the runtime review area or alternatives.
+4. Submit every allowed section in one valid JSON call. Values may use `###` subsections; the runtime also normalizes accidental nested `##` headings. At a modeling human gate, submit `decisionItems` for open, deferred, and out-of-scope decisions. Every block is `{id, statement, documentSection}`: `statement` is the exact conclusion that may enter that authoritative section only after approval, so before review it belongs only in the runtime review area or alternatives. If authoritative prose mentions an open or deferred issue, keep one issue per line and cite both `DEC-ID/BLOCK-ID` on that line.
 
 ```json
 {"action":"complete-stage","input":{"stage":"<stageId>","summary":"至少20字的阶段结论","sections":{"<allowed heading>":"完整正文"},"observations":[{"heading":"<heading>","kind":"<allowed kind>","statement":"正文中的原句","evidence_refs":["code:relative/path#L1-L3"]}]}}
