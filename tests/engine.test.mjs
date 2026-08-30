@@ -1033,6 +1033,54 @@ test("signed term absence cannot become no implementation claims in summary or p
   }
 })
 
+test("OpenSpec index evidence cannot be widened into capability or boundary conclusions", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "openspec-index-widening"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
+    const expanded = "`openspec/specs` 当前为空，无历史 DDD change，尚无已批准的战略决策可恢复；收藏能力及其战略边界为空白待建。"
+    const payload = baselinePayload()
+    payload.sections["证据与追踪"] += `\n\n${expanded}`
+    payload.claims.push({
+      id: "OPEN-WIDENED-INDEX", kind: "open-question", statement: expanded, maturity: "hypothesis",
+      documentSection: "证据与追踪", authorityRefs: [packet.openSpecIndex.citation],
+      evidenceRefs: [packet.openSpecIndex.citation],
+      attributes: { observationLevel: "statically-reachable", availability: "absent", evidenceSubject: expanded },
+    })
+    const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "OPENSPEC_INDEX_CLAIM_TYPE_INVALID"))
+    assert.ok(result.findings.some((finding) => finding.code === "OPENSPEC_INDEX_SUBJECT_MISMATCH"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("OpenSpec index evidence accepts only its signed current-spec statement", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "openspec-index-exact"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
+    const statement = packet.openSpecIndex.statement
+    const payload = baselinePayload()
+    payload.sections["证据与追踪"] += `\n\n${statement}`
+    payload.claims.push({
+      id: "FACT-OPENSPEC-INDEX", kind: "current-spec-decision", statement, maturity: "fact",
+      documentSection: "证据与追踪", authorityRefs: [packet.openSpecIndex.citation],
+      evidenceRefs: [packet.openSpecIndex.citation],
+      attributes: { observationLevel: "statically-reachable", availability: "operational", evidenceSubject: statement },
+    })
+    const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(!result.findings?.some((finding) => finding.code.startsWith("OPENSPEC_INDEX_")))
+    assert.equal(result.lastCompletedStage, "01-current-evidence", JSON.stringify(result.findings, null, 2))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test("evidence stage permits a design-looking sentence when it is an explicit evidence gap", async () => {
   const dir = await freshProject()
   try {
@@ -2224,6 +2272,8 @@ test("evidence bundle returns bounded cited excerpts and OpenSpec index", async 
       text: "L3: 用户自有数据必须通过 JsonFileStore 持久化。",
     }])
     assert.deepEqual(packet.openSpecIndex.currentSpecs, ["current-shop"])
+    assert.equal(packet.openSpecIndex.statement,
+      "OpenSpec 索引显示：当前正式 specs 为 `current-shop`；历史活动 changes 为空。")
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

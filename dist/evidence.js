@@ -32,6 +32,11 @@ async function names(root) {
         return [];
     return (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
 }
+function openSpecIndexStatement(currentSpecs, priorChanges) {
+    const specs = currentSpecs.length ? `为 ${currentSpecs.map((item) => `\`${item}\``).join("、")}` : "为空";
+    const changes = priorChanges.length ? `为 ${priorChanges.map((item) => `\`${item}\``).join("、")}` : "为空";
+    return `OpenSpec 索引显示：当前正式 specs ${specs}；历史活动 changes ${changes}。`;
+}
 async function projectConventionEvidence(root) {
     const result = [];
     const seen = new Set();
@@ -125,6 +130,7 @@ export async function evidenceBundle(projectRoot, workflowId, rawTerms) {
     const topLevel = (await readdir(projectRoot, { withFileTypes: true })).map((entry) => entry.name).filter((name) => !ignored.has(name)).sort();
     const currentSpecs = await names(path.join(projectRoot, "openspec", "specs"));
     const priorChanges = (await names(path.join(projectRoot, "openspec", "changes"))).filter((name) => name !== "archive" && name !== workflowId);
+    const openSpecStatement = openSpecIndexStatement(currentSpecs, priorChanges);
     const conventions = await projectConventionEvidence(projectRoot);
     const mandatoryCompatibilityConstraints = conventions.flatMap(({ excerpts }) => excerpts)
         .filter(({ mandatory }) => mandatory).map(({ mandatory: _mandatory, ...item }) => item);
@@ -138,7 +144,13 @@ export async function evidenceBundle(projectRoot, workflowId, rawTerms) {
         matches: matches.slice(0, 8).map(({ file, excerpts }) => ({ file, excerpts })),
         projectConventionEvidence: conventions,
         mandatoryCompatibilityConstraints,
-        openSpecIndex: { currentSpecs, priorChanges, citation: "search:openspec/specs-and-prior-changes" },
+        openSpecIndex: {
+            currentSpecs,
+            priorChanges,
+            citation: "search:openspec/specs-and-prior-changes",
+            statement: openSpecStatement,
+            rule: "该引用只证明列出的 OpenSpec specs/change 索引；claim 必须逐字复制 statement，不得推导业务能力不存在、边界为空白或目标设计待建。",
+        },
         negativeSearchEvidence: absentTerms.length ? {
             ref: negativeSearchRef,
             absentTerms,
@@ -146,7 +158,7 @@ export async function evidenceBundle(projectRoot, workflowId, rawTerms) {
             statement: negativeSearchStatement,
             rule: "该引用只证明 absentTerms 中的精确代码词在本次完整源码文件扫描中未命中；不得据此声称整个业务能力、模块或其他实体不存在。",
         } : null,
-        citationRule: "事实的 evidence_refs 必须逐字复制 excerpt.ref（code:相对路径#Lx-Ly）；不得只写裸路径。使用负向搜索时，observation.statement 必须逐字复制 negativeSearchEvidence.statement，不得追加能力、模块或实体不存在的推论。mandatoryCompatibilityConstraints 必须逐项写为兼容性约束，后续设计不得降级为实施前可选核验。未出现的行为只写为 evidence-gap/open-question，不得在缺口中决定新增表、模型、接口或实现；不再扩大搜索。",
+        citationRule: "事实的 evidence_refs 必须逐字复制 excerpt.ref（code:相对路径#Lx-Ly）；不得只写裸路径。使用负向搜索时，observation.statement 必须逐字复制 negativeSearchEvidence.statement，不得追加能力、模块或实体不存在的推论。使用 OpenSpec 索引时必须提交 current-spec-decision/fact 并逐字复制 openSpecIndex.statement，不得推导业务能力或战略边界。mandatoryCompatibilityConstraints 必须逐项写为兼容性约束，后续设计不得降级为实施前可选核验。未出现的行为只写为 evidence-gap/open-question，不得在缺口中决定新增表、模型、接口或实现；不再扩大搜索。",
         requiredCoverage: ["事实、假设与待确认项", "工程约束与兼容性", "可执行验收约束", "现状代码证据索引", "验证基线", "OpenSpec历史战略基线"],
         responseBudget: { totalSectionChars: "900-1600", observations: "4-6" },
         nextAction: "依据本 bundle 直接调用 complete-stage；不要逐文件补读、不要先输出草稿或推理。",

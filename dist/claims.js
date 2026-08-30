@@ -23,6 +23,7 @@ const evidenceBaselineContract = {
         "fact 必须绑定可检查证据；证据不足只能使用 hypothesis、evidence-gap 或 open-question。",
         "本阶段不能提交目标设计、只读实现、Schema 选择、回滚方案、聚合、服务或持久化决策。",
         "声称不存在、只有或仅有某能力时，必须提供 search: 负向搜索范围，并标明 availability=absent。",
+        "OpenSpec 索引只能登记为 current-spec-decision/fact，并逐字复制 evidence-bundle 签发的 openSpecIndex.statement。",
     ],
 };
 export function claimContractFor(scopeId) {
@@ -185,6 +186,10 @@ export async function validateStageClaims(state, scopeId, writableHeadings, sect
     }));
     const issuedCodeRefs = new Set((Array.isArray(snapshot.issuedCodeEvidence) ? snapshot.issuedCodeEvidence : [])
         .map((item) => String(item?.ref ?? "").trim()).filter(Boolean));
+    const openSpecIndex = snapshot.openSpecIndex && typeof snapshot.openSpecIndex === "object"
+        ? snapshot.openSpecIndex : {};
+    const openSpecCitation = String(openSpecIndex.citation ?? "search:openspec/specs-and-prior-changes");
+    const openSpecStatement = String(openSpecIndex.statement ?? "").trim();
     const ids = new Set();
     const allowedKinds = new Set(contract.allowedKinds);
     const allowedMaturities = new Set(contract.allowedMaturities);
@@ -252,6 +257,17 @@ export async function validateStageClaims(state, scopeId, writableHeadings, sect
                     }
                 }
             }
+            if (reference === openSpecCitation) {
+                if (claim.kind !== "current-spec-decision" || claim.maturity !== "fact") {
+                    findings.push(finding("OPENSPEC_INDEX_CLAIM_TYPE_INVALID", base, "OpenSpec 索引只能登记为 current-spec-decision/fact，不能伪装成业务开放问题或目标设计。"));
+                }
+                if (!openSpecStatement || claim.statement.trim() !== openSpecStatement) {
+                    findings.push(finding("OPENSPEC_INDEX_SUBJECT_MISMATCH", `${base}.statement`, `OpenSpec 索引 claim 必须逐字使用签发 statement：“${openSpecStatement || "<缺少签发 statement>"}”。`));
+                }
+                if (!Array.isArray(claim.authorityRefs) || !claim.authorityRefs.includes(reference)) {
+                    findings.push(finding("OPENSPEC_INDEX_AUTHORITY_MISMATCH", `${base}.authorityRefs`, `OpenSpec 索引 claim 的 authorityRefs 必须包含同一个签发引用：${reference}。`));
+                }
+            }
             if (reference.startsWith("code:") && !issuedCodeRefs.has(reference)) {
                 findings.push(finding("CODE_EVIDENCE_NOT_ISSUED", `${base}.evidenceRefs`, `代码证据必须逐字使用 evidence-bundle 签发的 excerpt.ref，禁止扩大行范围或补读未签发位置：${reference}。`));
             }
@@ -303,6 +319,11 @@ export async function validateStageClaims(state, scopeId, writableHeadings, sect
                 && claim.evidenceRefs.includes(reference))))];
         if (unmapped.length)
             findings.push(finding("UNMAPPED_SIGNED_SEARCH_EVIDENCE", part.path, `正文引用了 evidence-bundle 签发的负向搜索证据，但完整 claims 中没有对应 evidence-gap：${unmapped.join("、")}。`, "保留该证据的 typed claim 并逐字使用签发 statement，或同时删除正文中的该引用；不得只删 claim。"));
+        if (openSpecStatement && part.text.includes(openSpecStatement)
+            && !claims.some((claim) => claim.kind === "current-spec-decision" && claim.maturity === "fact"
+                && claim.statement === openSpecStatement && claim.evidenceRefs.includes(openSpecCitation))) {
+            findings.push(finding("UNMAPPED_OPENSPEC_INDEX_EVIDENCE", part.path, "正文使用了签发的 OpenSpec 索引 statement，但完整 claims 中没有对应 current-spec-decision/fact。", "保留逐字匹配的 typed claim，或同时删除正文中的索引 statement。"));
+        }
         const proseCodeRefs = [...part.text.matchAll(/code:[A-Za-z0-9_./\\-]+#L\d+-L\d+/gu)].map((match) => match[0]);
         const unissuedCodeRefs = [...new Set(proseCodeRefs.filter((reference) => !issuedCodeRefs.has(reference)))];
         if (unissuedCodeRefs.length)
