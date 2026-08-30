@@ -160,9 +160,12 @@ function replaceSection(body, heading, content) {
     // substring `## 模型与边界候选`; the old expression replaced that nested
     // subsection and left the real milestone section's placeholder untouched.
     const re = new RegExp(`(^|\\n)(##[ \\t]+${escaped}[ \\t]*\\r?\\n)([\\s\\S]*?)(?=\\n##[ \\t]|$)`, "u");
-    const replacement = `$1$2\n${content.trim()}\n`;
+    // Use a callback rather than a replacement template. Domain text commonly
+    // contains regexes such as `^u-[a-z0-9-]+$`; when followed by Markdown's
+    // closing backtick that forms JavaScript's special `$`` replacement token
+    // and injects the complete document prefix into the section.
     if (re.test(body))
-        return body.replace(re, replacement);
+        return body.replace(re, (_match, prefix, headingLine) => `${prefix}${headingLine}\n${content.trim()}\n`);
     return `${body.trimEnd()}\n\n## ${heading}\n\n${content.trim()}\n`;
 }
 //# sourceMappingURL=documents.js.map

@@ -39,6 +39,27 @@ test("renderSections replaces only the matching level-two milestone section", ()
   assert.deepEqual(unfilledHeadings(rendered), ["证据与追踪"])
 })
 
+test("renderSections preserves dollar replacement tokens as literal domain text", () => {
+  const skeleton = [
+    "# 里程碑 I：战略事件风暴",
+    "",
+    "## 输入场景与现状事实",
+    "",
+    "> _待填写_",
+    "",
+    "## 战略事件风暴",
+    "",
+    "> _待填写_",
+    "",
+  ].join("\n")
+  const content = "身份格式是 `^u-[a-z0-9-]+$`；以下符号必须保持字面值：`$&`、`$'`、`$$`、`$``。"
+  const rendered = renderSections(skeleton, { "输入场景与现状事实": content })
+  assert.ok(rendered.includes(content))
+  assert.equal(rendered.match(/# 里程碑 I：战略事件风暴/gu)?.length, 1)
+  assert.match(rendered, /## 输入场景与现状事实\n\n身份格式是/u)
+  assert.match(rendered, /## 战略事件风暴\n\n> _待填写_/u)
+})
+
 test("lifecycle finalize accepts stage-card camelCase metadata", () => {
   assert.deepEqual(lifecycleFinalizeMetadata({ plannedSlices: 2, sliceId: "slice-1" }), {
     plannedSlices: 2,
