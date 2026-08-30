@@ -316,6 +316,24 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
   const partial = input.finalize === false
   const findings = await validateSubmission(root, profile, state, stage, merged, { partial })
   if (findings.some((f) => f.severity === "blocking")) {
+    // A stage rejected by the durable transition cannot be repaired by
+    // rewriting its content. Persisting that payload as a repair draft tells
+    // weaker schedulers to retry an impossible action and was the direct cause
+    // of a Mobile loop at an awaiting-review gate. Fail closed without
+    // touching the workbench; the caller must follow the returned transition.
+    if (findings.some((finding) => finding.code === "STAGE_NOT_ALLOWED")) {
+      return {
+        ...workflowTransition(profile, state), findings,
+        documentPath: documentPath(root, profile, stage.document),
+        draft: {
+          saved: false,
+          repairOnly: false,
+          retryableByModel: false,
+          mustStop: true,
+          nextAction: "当前 transition 不允许提交该阶段。禁止重试 complete-stage；只执行 requiredAction，若正在人工门则等待或提交 review。",
+        },
+      }
+    }
     // Deliberately partial drafts are only persisted after validation. This
     // keeps the workbench from becoming a bypass for out-of-stage content.
     if (partial) return { ...workflowTransition(profile, state), findings, documentPath: documentPath(root, profile, stage.document) }
@@ -573,12 +591,25 @@ export function queryPseudoEvents(text: string): string[] {
     const segments = line.split(/(?:→|->)/u).map((item) => item.trim())
     const queryIndex = segments.findIndex((item) => /(?:查询|读取|检索|获取|\bquery\b|\bread\b)/iu.test(item))
     if (queryIndex < 0) return []
-    return segments.slice(queryIndex + 1).filter((segment) => {
-      if (/(?:读模型|read model|非领域事件)/iu.test(segment)) return false
+    const candidates: string[] = []
+    // A line may contain `query -> returns read model -> command -> emits event`.
+    // Only the result portion of the query belongs to the query chain; scanning
+    // through a later command used to misclassify its genuine state-changing
+    // event as a query-completion pseudo event.
+    for (const segment of segments.slice(queryIndex + 1)) {
+      if (/(?:[（(]\s*(?:命令|command)\s*[）)]|(?:命令|command)\s*[：:]|\bissues?\s+command\b)/iu.test(segment)) break
+      const explicitReadModel = /(?:\breturns?\b|读模型|read model|非领域事件)/iu.test(segment)
       const declaredEvent = /(?:🟧|领域事件|\bevent\b|\bemits\b)/iu.test(segment)
       const resultDisguisedAsFact = /(?:轨迹|列表|详情|结果|页面|视图|报告|数据)[^。；]{0,20}(?:已生成|已形成|已返回|已查询|已读取|已加载|已展示)/u.test(segment)
-      return declaredEvent || resultDisguisedAsFact
-    }).map((segment) => segment
+      if (!/(?:读模型|read model|非领域事件)/iu.test(segment) && (declaredEvent || resultDisguisedAsFact)) {
+        candidates.push(segment)
+      }
+      // An explicit return/read-model segment resolves this query. Anything to
+      // its right is a subsequent interaction, even when the author omitted a
+      // `(命令)` label on the following business action.
+      if (explicitReadModel) break
+    }
+    return candidates.map((segment) => segment
       .replace(/^(?:🟧\s*|领域事件\s*[：:]?\s*|事件\s*[：:]?\s*)/iu, "")
       .replace(/\([^)]*\)\s*$/u, "")
       .replace(/[。；;]+$/u, "")
@@ -644,12 +675,85 @@ async function compactApprovedModelContract(root: string, scopeId?: string): Pro
 
 export function extractApprovedModelContract(document: string) {
   const text = String(document)
-  const modelElements = [...text.matchAll(/\b(ME-\d+)\s+(?:聚合根\s+|读模型\s+)?([A-Za-z][A-Za-z0-9_]*)/gu)]
-    .map((match) => ({ id: match[1], name: match[2] }))
-  const uniqueModels = [...new Map(modelElements.map((item) => [item.id, item])).values()]
-  const invariantMatches = [...text.matchAll(/\b(INV-\d+)(?:\s*[：:]\s*|\s+)([^|\n。；]{3,180})/gu)]
-    .map((match) => ({ id: match[1], statement: match[2].trim() }))
-  const invariants = [...new Map(invariantMatches.map((item) => [item.id, item])).values()].sort((a, b) => a.id.localeCompare(b.id))
+  const modelElements: Array<{ id: string; name: string }> = []
+  const invariantMatches: Array<{ id: string; statement: string }> = []
+
+  // Prefer an explicitly embedded machine contract when one is present.  The
+  // scanner accepts fenced JSON and a balanced object following a
+  // `model-contract` label, while still validating every extracted field.
+  const jsonCandidates: string[] = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/giu)].map((match) => match[1])
+  for (const marker of text.matchAll(/model-contract/giu)) {
+    const start = text.indexOf("{", (marker.index ?? 0) + marker[0].length)
+    if (start < 0) continue
+    let depth = 0; let inString = false; let escaped = false
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (char === "\\") escaped = true
+        else if (char === '"') inString = false
+        continue
+      }
+      if (char === '"') inString = true
+      else if (char === "{") depth += 1
+      else if (char === "}" && --depth === 0) {
+        jsonCandidates.push(text.slice(start, index + 1))
+        break
+      }
+    }
+  }
+  const visitContract = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(visitContract); return }
+    if (!value || typeof value !== "object") return
+    const record = value as Record<string, unknown>
+    if (Array.isArray(record.modelElements)) {
+      for (const item of record.modelElements) {
+        if (!item || typeof item !== "object") continue
+        const id = String((item as any).id ?? "").trim()
+        const name = String((item as any).name ?? "").trim()
+        if (/^ME-\d+$/u.test(id) && /^[\p{L}_][\p{L}\p{N}_.\- ]{1,79}$/u.test(name)) modelElements.push({ id, name })
+      }
+    }
+    if (Array.isArray(record.invariants)) {
+      for (const item of record.invariants) {
+        if (!item || typeof item !== "object") continue
+        const id = String((item as any).id ?? "").trim()
+        const statement = String((item as any).statement ?? (item as any).rule ?? "").trim()
+        if (/^INV-\d+$/u.test(id) && statement.length >= 3 && statement.length <= 500) invariantMatches.push({ id, statement })
+      }
+    }
+    Object.values(record).forEach(visitContract)
+  }
+  for (const candidate of jsonCandidates) {
+    try { visitContract(JSON.parse(candidate)) } catch { /* prose fallback below */ }
+  }
+
+  // Prose contracts are intentionally recognized by high-confidence shapes:
+  // a quoted name, an explicit colon, an ASCII identifier, or a Chinese name
+  // immediately qualified by a DDD model kind.  Plain references such as
+  // `ME-01 和 ME-02` therefore cannot become model definitions accidentally.
+  const kinds = "聚合根|实体|值对象|领域服务|应用服务|仓储抽象|仓储接口|读模型|工厂|策略|端口|适配器"
+  for (const match of text.matchAll(/\b(ME-\d+)\b/gu)) {
+    const id = match[1]
+    const rawTail = text.slice((match.index ?? 0) + match[0].length, (match.index ?? 0) + match[0].length + 140)
+    const clause = rawTail.split(/[；;。|\n]/u, 1)[0].trim()
+    if (!clause || /^[\/、,，→]/u.test(clause)) continue
+    const quoted = clause.match(/^\s*(?:[：:]\s*)?[`*]{1,2}([^`*]{2,80})[`*]{1,2}/u)?.[1]
+    const typedSuffix = clause.match(new RegExp(`^\\s*(?:[：:]\\s*)?[\`*]{0,2}([\\p{L}_][\\p{L}\\p{N}_.\\- ]{1,79}?)[\`*]{0,2}\\s*(?:${kinds})(?=[：:\\s，,]|$)`, "u"))?.[1]
+    const typedPrefix = clause.match(new RegExp(`^\\s*(?:[：:]\\s*)?(?:${kinds})\\s*[\`*]{0,2}([\\p{L}_][\\p{L}\\p{N}_.\\- ]{1,79})[\`*]{0,2}(?=[：:\\s，,]|$)`, "u"))?.[1]
+    const colonName = clause.match(/^\s*[：:]\s*[`*]{0,2}([\p{L}_][\p{L}\p{N}_.\-]{1,79})[`*]{0,2}(?=[：:\s，,]|$)/u)?.[1]
+    const asciiName = clause.match(/^\s*(?:[：:]\s*)?[`*]{0,2}([A-Za-z][A-Za-z0-9_.\-]{1,79})[`*]{0,2}(?=[：:\s，,]|$)/u)?.[1]
+    const name = String(quoted ?? typedSuffix ?? typedPrefix ?? colonName ?? asciiName ?? "").trim()
+    if (name && !/^(?:的|由|与|和|及|在|位于|用于|依赖|保护|覆盖|对应)/u.test(name)) modelElements.push({ id, name })
+  }
+  invariantMatches.push(...[...text.matchAll(/\b(INV-\d+)(?:\s*[：:]\s*|\s+)([^|\n。；]{3,180})/gu)]
+    .map((match) => ({ id: match[1], statement: match[2].replace(/[`*_]/gu, "").trim() })))
+  const firstModels = new Map<string, { id: string; name: string }>()
+  for (const item of modelElements) if (!firstModels.has(item.id)) firstModels.set(item.id, item)
+  const firstInvariants = new Map<string, { id: string; statement: string }>()
+  for (const item of invariantMatches) if (!firstInvariants.has(item.id)) firstInvariants.set(item.id, item)
+  const uniqueModels = [...firstModels.values()].sort((a, b) => a.id.localeCompare(b.id))
+  const invariants = [...firstInvariants.values()].sort((a, b) => a.id.localeCompare(b.id))
   return { modelElements: uniqueModels, invariants }
 }
 
@@ -895,6 +999,7 @@ export function validateStageSemantics(state: WorkflowState, stage: any, input: 
 
   if (["system-discovery", "system-strategy"].includes(stage.scopeContract?.id)) {
     const original = state.originalRequest ?? ""
+    const authorizedContext = approvedSemanticContext(state)
     const advisoryHeadings = new Set(["证据与追踪", "备选解释与建议", "备选战略方案与建议", "本次请您确认"])
     const onlyAdvisory = entries.length > 0 && entries.every(([heading]) => advisoryHeadings.has(heading))
     const businessText = [...(onlyAdvisory ? [] : [input.summary]), ...entries
@@ -907,7 +1012,8 @@ export function validateStageSemantics(state: WorkflowState, stage: any, input: 
       "计数", "统计", "排行", "区间查询", "支付", "个性化推荐", "智能推荐",
       "店铺推荐", "内容推荐", "推荐分析", "推荐系统", "导出", "审批", "核销",
     ]
-    const expanded = capabilityTerms.filter((term) => !original.includes(term) && hasAffirmativeOccurrence(businessText, term))
+    const expanded = capabilityTerms.filter((term) => !original.includes(term)
+      && hasUnauthorizedCapabilityOccurrence(businessText, term, authorizedContext))
     if (expanded.length) addFinding("INTENT_CAPABILITY_EXPANSION", "originalRequest", expanded,
       "提交内容把原始需求未授权的能力写入了主流程、用例或验收结果")
   }
@@ -917,21 +1023,55 @@ export function validateStageSemantics(state: WorkflowState, stage: any, input: 
 function hasAffirmativeOccurrence(text: string, term: string): boolean {
   let offset = text.indexOf(term)
   while (offset >= 0) {
-    const sentenceStart = Math.max(text.lastIndexOf("。", offset - 1), text.lastIndexOf("；", offset - 1), text.lastIndexOf("\n", offset - 1)) + 1
-    const ends = [text.indexOf("。", offset), text.indexOf("；", offset), text.indexOf("\n", offset)].filter((i) => i >= 0)
-    const sentenceEnd = ends.length ? Math.min(...ends) : text.length
-    const headingStart = Math.max(text.lastIndexOf("\n###", offset), text.lastIndexOf("\n##", offset))
-    const sentence = text.slice(headingStart >= 0 ? headingStart : sentenceStart, sentenceEnd)
-    const prefix = text.slice(Math.max(0, offset - 500), offset)
-    const categoryPattern = /(?:#{1,6}\s*|\*\*)?(非目标|范围外|未来候选|后续候选|不纳入本次|本次目标|主流程|验收结果|现状已存在)(?:\*\*)?\s*[：:]?/gu
-    const categories = [...prefix.matchAll(categoryPattern)]
-    const nearestCategory = categories.at(-1)?.[1] ?? ""
-    const excludedCategory = /^(?:非目标|范围外|未来候选|后续候选|不纳入本次)$/u.test(nearestCategory)
-    const excluded = excludedCategory || /(?:不|禁止|不得|不得提前|排除|范围外|非目标|暂不|无需|不做|推迟|留待|待后续|归(?:战术|后续)[^。；\n]{0,8}设计|未授权|未(?:设计|指定|决定|引入|新增|包含)|没有|不恢复|未来候选|后续候选|不纳入|不触碰)/u.test(sentence)
-    if (!excluded) return true
+    if (isAffirmativeOccurrenceAt(text, term, offset)) return true
     offset = text.indexOf(term, offset + term.length)
   }
   return false
+}
+
+function isAffirmativeOccurrenceAt(text: string, term: string, offset: number): boolean {
+  const sentenceStart = Math.max(text.lastIndexOf("。", offset - 1), text.lastIndexOf("；", offset - 1), text.lastIndexOf("\n", offset - 1)) + 1
+  const ends = [text.indexOf("。", offset), text.indexOf("；", offset), text.indexOf("\n", offset)].filter((i) => i >= 0)
+  const sentenceEnd = ends.length ? Math.min(...ends) : text.length
+  const headingStart = Math.max(text.lastIndexOf("\n###", offset), text.lastIndexOf("\n##", offset))
+  const contextStart = headingStart >= 0 ? headingStart : sentenceStart
+  const sentence = text.slice(contextStart, sentenceEnd)
+  const prefix = text.slice(Math.max(0, offset - 500), offset)
+  const categoryPattern = /(?:#{1,6}\s*|\*\*)?(非目标|范围外|未来候选|后续候选|不纳入本次|本次目标|主流程|验收结果|现状已存在)(?:\*\*)?\s*[：:]?/gu
+  const categories = [...prefix.matchAll(categoryPattern)]
+  const nearestCategory = categories.at(-1)?.[1] ?? ""
+  const excludedCategory = /^(?:非目标|范围外|未来候选|后续候选|不纳入本次)$/u.test(nearestCategory)
+  const localOffset = offset - contextStart
+  const before = sentence.slice(0, Math.max(0, localOffset))
+  const after = sentence.slice(Math.max(0, localOffset + term.length))
+  const scopedExclusionBefore = /(?:范围外|非目标|未来候选|后续候选|不纳入本次)[^。；\n]{0,100}$/u.test(before)
+  const directExclusionBefore = /(?:排除|暂不|无需|不做|有意遗漏|未授权|(?:不|未)(?:在本阶段)?(?:给出|要求|支持|提供|实现|采用|使用|涉及|设计|指定|决定|引入|新增|包含|触碰)|没有|推迟|留待|不纳入|不触碰)[^、，,。；\n]{0,40}(?:、[^、，,。；\n]{0,40})*$/u.test(before)
+  const excludedAfter = /^[^。；\n]{0,120}(?:(?:只|仅)作为(?:未来|后续)(?:机会|候选|演进项|热点)|不(?:进入|参与|纳入|作为)(?:本次|首期|当前)?(?:主流程|范围|交付|能力)?|留待后续|待后续|未来候选|后续候选|范围外|非目标)/u.test(after)
+  const excluded = excludedCategory || scopedExclusionBefore || directExclusionBefore || excludedAfter
+    || /(?:禁止|不得|不得提前|归(?:战术|后续)[^。；\n]{0,8}设计|不恢复)/u.test(sentence)
+  return !excluded
+}
+
+function hasUnauthorizedCapabilityOccurrence(text: string, term: string, authorizedContext: string): boolean {
+  let offset = text.indexOf(term)
+  while (offset >= 0) {
+    if (isAffirmativeOccurrenceAt(text, term, offset)
+      && !isAuthorizedDerivedCapability(term, text, offset, authorizedContext)) return true
+    offset = text.indexOf(term, offset + term.length)
+  }
+  return false
+}
+
+function isAuthorizedDerivedCapability(term: string, text: string, offset: number, authorizedContext: string): boolean {
+  if (term !== "计数") return false
+  // Counting is a distinct capability in e.g. "按日浏览计数", but it is an
+  // unavoidable state measure of an already authorized capacity/quota rule.
+  // Authorization must come from the original request or an approved human
+  // milestone, never from the candidate text itself.
+  const capacityAuthorized = /(?:名额|容量|配额|席位)[^。；\n]{0,24}(?:约束|上限|限制|不得超过|未满|满员)|(?:名额约束|容量约束|配额约束)/u.test(authorizedContext)
+  if (!capacityAuthorized) return false
+  const local = text.slice(Math.max(0, offset - 48), Math.min(text.length, offset + term.length + 48))
+  return /(?:报名|名额|容量|配额|席位|满员|剩余|占用|释放)/u.test(local)
 }
 
 function hasStrategicTechnicalOccurrence(text: string, term: string): boolean {

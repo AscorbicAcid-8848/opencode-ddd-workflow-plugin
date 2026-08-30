@@ -56,23 +56,45 @@ async function bindRuntimeSession(identity, sessionID) {
     state.runtimeSessionId = sessionID;
     await saveState(root, state);
 }
-async function persistedStageForSession(projectRoot, sessionID) {
-    const changesDir = path.join(projectRoot, "openspec", "changes");
-    if (!await exists(changesDir))
-        return undefined;
-    for (const entry of await readdir(changesDir, { withFileTypes: true })) {
-        if (!entry.isDirectory() || entry.name === "archive")
+const LIFECYCLE_ONLY_SENTINEL = "__ddd-lifecycle-only__";
+function pluginProjectRoots(pluginInput) {
+    const input = pluginInput;
+    return [...new Set([input.directory, input.worktree, process.cwd()]
+            .filter((candidate) => Boolean(candidate))
+            .map((candidate) => path.resolve(candidate)))];
+}
+async function persistedStageForSession(projectRoots, sessionID) {
+    for (const projectRoot of Array.isArray(projectRoots) ? projectRoots : [projectRoots]) {
+        const changesDir = path.join(projectRoot, "openspec", "changes");
+        if (!await exists(changesDir))
             continue;
-        const root = path.join(changesDir, entry.name, "ddd");
-        if (!await exists(statePath(root)))
-            continue;
-        try {
-            const state = await loadState(root);
-            if (state.runtimeSessionId === sessionID && !["complete", "rejected"].includes(state.status))
-                return state.currentStage;
-        }
-        catch {
-            // A malformed unrelated change must not break tool dispatch.
+        for (const entry of await readdir(changesDir, { withFileTypes: true })) {
+            if (!entry.isDirectory() || entry.name === "archive")
+                continue;
+            const root = path.join(changesDir, entry.name, "ddd");
+            if (!await exists(statePath(root)))
+                continue;
+            try {
+                const state = await loadState(root);
+                if (state.runtimeSessionId !== sessionID || ["complete", "rejected"].includes(state.status))
+                    continue;
+                // prepare is intentionally cleared when a stage is published and at a
+                // human gate. A new Mobile process must still recover the owning DDD
+                // session before its first Read/Bash call. Prefer the explicit prepared
+                // or blocked stage, then the pending human gate, and finally the durable
+                // current/checkpoint stage. The sentinel fails closed for older states
+                // that have session ownership but no usable stage id.
+                const pendingGate = [...state.checkpoints].reverse().find((checkpoint) => checkpoint.status === "awaiting_review" || checkpoint.status === "revision_requested");
+                if (state.status === "runtime_blocked")
+                    return LIFECYCLE_ONLY_SENTINEL;
+                return [state.preparedStage?.stage, state.runtimeBlock?.stage, pendingGate?.stage,
+                    state.currentStage, state.checkpoints.at(-1)?.stage]
+                    .find((stage) => typeof stage === "string" && stage.trim().length > 0)
+                    ?? LIFECYCLE_ONLY_SENTINEL;
+            }
+            catch {
+                // A malformed unrelated change must not break tool dispatch.
+            }
         }
     }
     return undefined;
@@ -110,6 +132,27 @@ async function resolveActiveIdentity(ctx, workflowType, workflowId) {
     throw new Error(`当前项目有多个活动 DDD change（${candidates.join("、")}），请显式传 workflow_type 与 workflow_id。`);
 }
 const out = (v) => JSON.stringify(v, null, 2);
+function lifecycleFailure(error, action) {
+    const result = {
+        error: error.message,
+        errorType: error.name,
+    };
+    if (action === "review") {
+        return {
+            ...result,
+            retryableByModel: false,
+            mustStop: true,
+            stopReason: "human-gate-contract-failed",
+            repairContract: {
+                boundary: "human-review",
+                allowedTools: ["ddd_lifecycle"],
+                forbiddenRecovery: ["read milestone files", "scan OpenSpec", "inspect plugin source", "run shell commands"],
+                nextAction: "原样向用户报告本错误并停止。不得自行把批准改为退回；只有用户明确给出修改意见后，才可用 review(decision=revise) 返回拥有该决策的阶段。",
+            },
+        };
+    }
+    return result;
+}
 export function lifecycleFinalizeMetadata(input) {
     return {
         plannedSlices: input.plannedSlices ?? input.planned_slices,
@@ -221,10 +264,22 @@ const disabledDddAgentTools = {
     ddd_lifecycle: true,
     skill: true,
     pdf_parse: false, excel_parse: false, excel_write: false,
-    subagent: false, workflow_run: false, todowrite: false,
-    webfetch: false, websearch: false, codesearch: false, skill_run_script: false,
+    subagent: false, task: false, workflow_run: false, todowrite: false,
+    webfetch: false, websearch: false, codesearch: false,
+    // Skill authoring/evaluation tools are host-management capabilities. DDD
+    // stages consume professional guidance through `skill`; exposing the
+    // management surface only adds schema tokens and escape routes.
+    skill_run_script: false,
+    skill_prepare_workspace: false, skill_validate: false, skill_parse: false,
+    skill_add_gold_standard: false, skill_list_gold_standards: false,
+    skill_remove_gold_standard: false, skill_get_gold_advice: false,
+    skill_eval: false, skill_improve_description: false, skill_optimize_loop: false,
+    skill_aggregate_benchmark: false, skill_generate_report: false,
+    skill_serve_review: false, skill_stop_review: false,
+    skill_export_static_review: false,
     CronCreate: false, CronList: false, CronDelete: false,
     question: false, plan_enter: false, plan_exit: false, lsp: false,
+    ls: false, list: false, mcp: false, lingji_run: false, evolve_run: false,
 };
 const modelingOnlyTools = {
     ...disabledDddAgentTools,
@@ -318,7 +373,9 @@ const lifecycleTool = tool({
                     const plan = await readJson(planFile);
                     const contractFile = path.join(root, "model-contract.json");
                     const contract = await exists(contractFile) ? await readJson(contractFile) : {};
-                    const compiledMilestone = compileDeliveryMilestoneSections(plan, id.workflowId, contract);
+                    const compiledMilestone = compileDeliveryMilestoneSections(plan, id.workflowId, contract, {
+                        workflowType: id.workflowType,
+                    });
                     summary = compiledMilestone.summary;
                     rawSections = compiledMilestone.sections;
                     i.plannedSlices = state.deliveryPlan.sliceIds.length;
@@ -523,7 +580,7 @@ const lifecycleTool = tool({
             return out({ error: `未知 action：${args.action}` });
         }
         catch (error) {
-            return out({ error: error.message, errorType: error.name });
+            return out(lifecycleFailure(error, args.action));
         }
     },
 });
@@ -622,6 +679,7 @@ export const dddLifecycleTool = lifecycleTool;
 // session guards at module scope so a stage prepared in one step still
 // constrains repository and shell tools in the next step.
 const dddSessions = new Set();
+const codingSessions = new Set();
 // The command hook is the only runtime boundary that sees the user's exact
 // slash-command argument before the model can reinterpret it. Bind that text
 // to the session and make init consume it as authoritative input.
@@ -659,6 +717,15 @@ function dddRequestFromMessage(parts) {
     }
     return undefined;
 }
+function applyModelingToolMask(message) {
+    // UserMessage.tools is the Mobile/OpenCode boundary that controls the model
+    // schema for the whole turn. Permission rules alone are insufficient in
+    // YOLO mode, and in-memory Sets disappear between `mobile run` processes.
+    // Reuse the same policy object used by the configured agent. Keeping one
+    // source of truth prevents a host restart or slash-command expansion from
+    // exposing a tool that the static agent configuration already denied.
+    message.tools = { ...(message.tools ?? {}), ...modelingOnlyTools };
+}
 export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
     // OpenCode and Mobile Coder 1.3+ both expose this definition directly from
     // the Plugin SDK. No MCP process, protocol adapter, or duplicated tool is
@@ -667,32 +734,27 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
     return {
         async "chat.message"(input, output) {
             const originalRequest = dddRequestFromMessage(output.parts);
-            if (!originalRequest)
+            const persistedStage = await persistedStageForSession(pluginProjectRoots(pluginInput), input.sessionID);
+            const modelingAgent = input.agent === DDD_AGENT_ID;
+            const codingAgent = input.agent === DDD_CODE_AGENT_ID;
+            if (!originalRequest && !persistedStage && !modelingAgent && !codingAgent)
                 return;
             dddSessions.add(input.sessionID);
-            pendingOriginalRequests.set(input.sessionID, originalRequest);
+            if (persistedStage)
+                activeStages.set(input.sessionID, persistedStage);
+            if (originalRequest)
+                pendingOriginalRequests.set(input.sessionID, originalRequest);
+            if (codingAgent)
+                codingSessions.add(input.sessionID);
+            else
+                codingSessions.delete(input.sessionID);
             // Mobile derives the visible tool table from UserMessage.tools. Put the
             // modeling policy at that boundary so disallowed tools are physically
             // absent from the model schema instead of relying only on a later hook.
-            output.message.tools = {
-                ...(output.message.tools ?? {}),
-                subagent: false,
-                workflow_run: false,
-                todowrite: false,
-                read: false,
-                glob: false,
-                grep: false,
-                bash: false,
-                shell: false,
-                edit: false,
-                write: false,
-                apply_patch: false,
-                patch: false,
-                multiedit: false,
-                multi_edit: false,
-                skill_run_script: false,
-                webfetch: false,
-            };
+            // ddd-coding keeps its bounded engineering tools visible, but the
+            // execute hook still requires lifecycle review/prepare before using them.
+            if (!codingAgent)
+                applyModelingToolMask(output.message);
         },
         async config(config) {
             config.agent ??= {};
@@ -729,6 +791,10 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
         async "command.execute.before"(input) {
             if (input.command === "ddd" || input.command === "ddd-code")
                 dddSessions.add(input.sessionID);
+            if (input.command === "ddd-code")
+                codingSessions.add(input.sessionID);
+            else if (input.command === "ddd")
+                codingSessions.delete(input.sessionID);
             if (input.command === "ddd") {
                 const originalRequest = String(input.arguments ?? "").trim();
                 if (originalRequest)
@@ -788,10 +854,14 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
                 }
             }
             const activeStage = activeStages.get(input.sessionID)
-                ?? await persistedStageForSession(path.resolve(pluginInput.worktree || pluginInput.directory || process.cwd()), input.sessionID);
+                ?? await persistedStageForSession(pluginProjectRoots(pluginInput), input.sessionID);
             const sessionIsDdd = dddSessions.has(input.sessionID) || Boolean(activeStage);
-            if (sessionIsDdd)
+            if (sessionIsDdd) {
                 dddSessions.add(input.sessionID);
+                if (activeStage)
+                    activeStages.set(input.sessionID, activeStage);
+            }
+            const codingToolAccess = Boolean(activeStage && implementationStages.has(activeStage) && codingSessions.has(input.sessionID));
             if (activeStage && implementationStages.has(activeStage)) {
                 if (["subagent", "workflow_run", "todowrite"].includes(toolName)) {
                     throw new Error("DDD_IMPLEMENTATION_TOOL_DENIED: 一个纵向切片必须在当前短事务内实现，禁止子代理、工作流扇出和探索 Todo。使用批准的文件映射；证据环境不可用时调用 action=block。");
@@ -833,8 +903,7 @@ export const DddWorkflowPlugin = async (pluginInput, pluginOptions) => {
                     throw new Error("DDD_FORMAL_ARTIFACT_WRITE_DENIED: 正式里程碑和 OpenSpec 规划工件只能通过 ddd_lifecycle 的 complete-stage/openspec-plan 事务写入，禁止使用通用文件工具绕过结构、语义与 strict validate 门禁。");
                 }
             }
-            if (sessionIsDdd && (!activeStage || !implementationStages.has(activeStage))
-                && !isDddLifecyclePayload && toolName !== "skill") {
+            if (sessionIsDdd && !codingToolAccess && !isDddLifecyclePayload && toolName !== "skill") {
                 throw new Error("DDD_LIFECYCLE_ONLY: 当前建模/审批阶段只允许 professional skill 与 ddd_lifecycle。无需检查 Skill 目录、扫描 OpenSpec 或查找 CLI；review 会自动绑定当前人工门，prepare 会返回全部阶段上下文。");
             }
         },

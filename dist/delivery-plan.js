@@ -1,4 +1,14 @@
 import { createHash } from "node:crypto";
+export function deliveryPlanSemanticEvidence(plan, context = {}) {
+    const isRefactor = context.workflowType === "refactor-system";
+    const hasSlices = plan.slices.length > 0;
+    return {
+        sliceCount: plan.slices.length,
+        migrationVerticalSlices: !isRefactor || hasSlices,
+        behaviorProtection: !isRefactor || (hasSlices && plan.slices.every((slice) => Boolean(slice.compatibility.trim()))),
+        independentRollback: !isRefactor || (hasSlices && plan.slices.every((slice) => Boolean(slice.rollback.trim()))),
+    };
+}
 const text = (value) => String(value ?? "").trim();
 const list = (value) => Array.isArray(value) ? value.map(text).filter(Boolean) : [];
 const decisionList = (value) => Array.isArray(value) ? value.map((item) => {
@@ -152,7 +162,9 @@ export function compileStructuredPlan(plan, workflowId) {
     };
     return { proposal, specs, design, tasks, roadmap };
 }
-export function compileDeliveryMilestoneSections(plan, workflowId, contract = {}) {
+export function compileDeliveryMilestoneSections(plan, workflowId, contract = {}, context = {}) {
+    const isRefactor = context.workflowType === "refactor-system";
+    const semanticEvidence = deliveryPlanSemanticEvidence(plan, context);
     const models = new Map((contract.modelElements ?? []).map((item) => [item.id, item]));
     const invariants = new Map((contract.invariants ?? []).map((item) => [item.id, item]));
     const modelLabel = (id) => {
@@ -163,21 +175,27 @@ export function compileDeliveryMilestoneSections(plan, workflowId, contract = {}
         const item = invariants.get(id);
         return item?.statement ? `${id}：${item.statement}` : id;
     };
-    const sliceDetails = plan.slices.flatMap((slice) => [
-        `### ${slice.id}：${slice.title}`,
-        `- 可观察业务结果：${slice.outcome}`,
-        `- 真实消费者：${slice.consumer}`,
-        `- 前置切片：${slice.dependsOn.join("、") || "无"}`,
-        `- 验收标准：${slice.acceptanceCriteria.join("；")}`,
-        `- 模型元素：${slice.modelElementIds.map(modelLabel).join("；")}`,
-        `- 业务不变量：${slice.invariantIds.map(invariantLabel).join("；")}`,
-        `- 生产文件：${slice.productionPaths.join("；")}`,
-        `- 测试文件：${slice.testPaths.join("；")}`,
-        `- 真实验证：${slice.verification.join("；")}`,
-        `- 兼容策略：${slice.compatibility}`,
-        `- 回滚策略：${slice.rollback}`,
-        "",
-    ]).join("\n").trim();
+    const sliceDetails = [
+        ...(isRefactor ? [
+            `迁移纵向切片：以下 ${semanticEvidence.sliceCount} 个切片直接来自已校验的 plan.slices；迁移顺序由 dependsOn 决定。`,
+            "",
+        ] : []),
+        ...plan.slices.flatMap((slice) => [
+            `### ${slice.id}：${slice.title}`,
+            `- 可观察业务结果：${slice.outcome}`,
+            `- 真实消费者：${slice.consumer}`,
+            `- 前置切片：${slice.dependsOn.join("、") || "无"}`,
+            `- 验收标准：${slice.acceptanceCriteria.join("；")}`,
+            `- 模型元素：${slice.modelElementIds.map(modelLabel).join("；")}`,
+            `- 业务不变量：${slice.invariantIds.map(invariantLabel).join("；")}`,
+            `- 生产文件：${slice.productionPaths.join("；")}`,
+            `- 测试文件：${slice.testPaths.join("；")}`,
+            `- 真实验证：${slice.verification.join("；")}`,
+            `- ${isRefactor ? "行为保护" : "兼容策略"}：${slice.compatibility}`,
+            `- 回滚策略：${slice.rollback}`,
+            "",
+        ]),
+    ].join("\n").trim();
     const traceRows = plan.slices.map((slice) => `| ${slice.id} | ${slice.acceptanceCriteria.join("；")} | ${slice.modelElementIds.join("、")} | ${slice.invariantIds.join("、")} | ${slice.productionPaths.join("；")} | ${slice.testPaths.join("；")} |`);
     const requirementRows = plan.capabilities.flatMap((capability) => capability.requirements.flatMap((requirement) => requirement.scenarios.map((scenario) => `- ${capability.id} / ${requirement.name} / ${scenario.name}：WHEN ${scenario.when}；THEN ${scenario.then}`)));
     const summary = `${plan.title}将按 ${plan.slices.length} 个可独立验收和回滚的纵向切片交付；所有切片均绑定真实消费者、批准模型、不变量、生产与测试文件以及验证命令。`;
@@ -196,9 +214,16 @@ export function compileDeliveryMilestoneSections(plan, workflowId, contract = {}
         "OpenSpec 变更映射": [`OpenSpec change 映射：${workflowId}`, "OpenSpec Requirement/Scenario 追踪：", ...requirementRows, `- 纵向切片：${plan.slices.map((slice) => slice.id).join("、")}`].join("\n"),
         "测试与验证计划": ["架构验证命令：复用下列每个切片已校验的工程验证命令，并在真实消费者链路中核验已批准的模块边界和依赖方向。", "", ...plan.slices.map((slice) => `### ${slice.id}\n- 验收：${slice.acceptanceCriteria.join("；")}\n- 测试文件：${slice.testPaths.join("；")}\n- 验证命令：${slice.verification.join("；")}`)].join("\n\n"),
         "Git 交付计划": [`Git 基线与回滚策略：编码开始前记录当前分支与 HEAD；每个切片形成一个独立提交。`, ...plan.slices.map((slice) => `- ${slice.id}：验证通过后独立提交；失败或回退时执行该切片批准的回滚策略：${slice.rollback}`), "- 禁止把多个未验证切片合并为一次提交；提交标识写入实现证据。"].join("\n"),
-        "风险、迁移与上线": plan.slices.map((slice) => `- ${slice.id} 兼容与迁移：${slice.compatibility}；回滚：${slice.rollback}`).join("\n"),
+        "风险、迁移与上线": [
+            ...(isRefactor ? [
+                "### 行为保护与回滚",
+                `结构化合同判定：行为保护字段${semanticEvidence.behaviorProtection ? "完整" : "不完整"}；独立回滚字段${semanticEvidence.independentRollback ? "完整" : "不完整"}。`,
+                "",
+            ] : []),
+            ...plan.slices.map((slice) => `- ${slice.id} 兼容与迁移：${slice.compatibility}；回滚：${slice.rollback}`),
+        ].join("\n"),
         "备选交付方案与建议": `推荐按当前 ${plan.slices.length} 个纵向切片渐进交付，每个切片都产生真实业务结果并可独立验证。若合并切片会扩大失败与回滚范围；若按技术层拆分则无法独立业务验收，因此均不推荐。`,
-        "证据与追踪": [`- OpenSpec change：${workflowId}`, `- 结构化计划哈希：${createHash("sha256").update(JSON.stringify(plan)).digest("hex")}`, `- model-contract.json 哈希：${contract.sourceSha256 ?? "由当前批准模型合同提供"}`, `- 切片数量：${plan.slices.length}`, "- 本文由运行时从已校验的结构化计划和批准模型合同确定性编译，未接受模型自由改写。"].join("\n"),
+        "证据与追踪": [`- OpenSpec change：${workflowId}`, `- 结构化计划哈希：${createHash("sha256").update(JSON.stringify(plan)).digest("hex")}`, `- model-contract.json 哈希：${contract.sourceSha256 ?? "由当前批准模型合同提供"}`, `- 切片数量：${plan.slices.length}`, ...(isRefactor ? [`- 重构交付合同：迁移纵向切片=${semanticEvidence.migrationVerticalSlices ? "满足" : "不满足"}；行为保护与回滚=${semanticEvidence.behaviorProtection && semanticEvidence.independentRollback ? "满足" : "不满足"}。`] : []), "- 本文由运行时从已校验的结构化计划和批准模型合同确定性编译，未接受模型自由改写。"].join("\n"),
     };
     return { summary, sections };
 }

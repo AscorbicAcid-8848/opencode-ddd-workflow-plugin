@@ -1,3 +1,4 @@
+import type { WorkflowType } from "./types.js";
 export interface DeliveryScenario {
     name: string;
     given?: string;
@@ -55,6 +56,23 @@ export interface ApprovedModelContract {
     }>;
     sourceSha256?: string;
 }
+export interface DeliveryCompilationContext {
+    workflowType?: WorkflowType;
+}
+/**
+ * Machine-readable evidence for workflow-specific delivery obligations.
+ *
+ * Milestone V is compiled only after `validateStructuredPlan` succeeds.  This
+ * projection deliberately derives refactoring obligations from typed slice
+ * fields instead of asking a Markdown phrase matcher to rediscover them.
+ */
+export interface DeliveryPlanSemanticEvidence {
+    sliceCount: number;
+    migrationVerticalSlices: boolean;
+    behaviorProtection: boolean;
+    independentRollback: boolean;
+}
+export declare function deliveryPlanSemanticEvidence(plan: StructuredDeliveryPlan, context?: DeliveryCompilationContext): DeliveryPlanSemanticEvidence;
 export declare function normalizeStructuredPlan(raw: any, current?: StructuredDeliveryPlan): StructuredDeliveryPlan;
 export declare function validateStructuredPlan(plan: StructuredDeliveryPlan): PlanFinding[];
 export declare function compileStructuredPlan(plan: StructuredDeliveryPlan, workflowId: string): {
@@ -89,7 +107,7 @@ export declare function compileStructuredPlan(plan: StructuredDeliveryPlan, work
         sourceHash: string;
     };
 };
-export declare function compileDeliveryMilestoneSections(plan: StructuredDeliveryPlan, workflowId: string, contract?: ApprovedModelContract): {
+export declare function compileDeliveryMilestoneSections(plan: StructuredDeliveryPlan, workflowId: string, contract?: ApprovedModelContract, context?: DeliveryCompilationContext): {
     summary: string;
     sections: Record<string, string>;
 };

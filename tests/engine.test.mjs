@@ -11,7 +11,7 @@ import { evidenceBundle } from "../dist/evidence.js"
 import { profileFor } from "../dist/catalog.js"
 import { workflowTransition } from "../dist/transition.js"
 import { loadState } from "../dist/state.js"
-import { compileDeliveryMilestoneSections, compileStructuredPlan, normalizeStructuredPlan, validateStructuredPlan } from "../dist/delivery-plan.js"
+import { compileDeliveryMilestoneSections, compileStructuredPlan, deliveryPlanSemanticEvidence, normalizeStructuredPlan, validateStructuredPlan } from "../dist/delivery-plan.js"
 
 test("renderSections replaces only the matching level-two milestone section", () => {
   const skeleton = [
@@ -67,6 +67,38 @@ const validStructuredPlan = {
     compatibility: "保留既有商铺详情响应", rollback: "revert slice commit" }],
 }
 
+// Reduced from the Codex six-way failure
+// `legacy-shop-access-records-refactor/.ddd/delivery/plan.json`.  Both slices
+// had complete typed compatibility/rollback fields, but milestone V was
+// rejected because its deterministic prose did not repeat two profile labels.
+const refactorRoadmapRegressionPlan = {
+  ...validStructuredPlan,
+  title: "遗留店铺访问记录行为保持重构",
+  objective: "保持公开调用、错误语义、排序与 JSON 格式，将规则迁入批准模型。",
+  nonGoals: ["不新增公开接口", "不迁移存储介质"],
+  slices: [
+    {
+      ...validStructuredPlan.slices[0],
+      id: "S1",
+      title: "记录访问路径迁入批准模型",
+      outcome: "recordShopVisit 的成功、拒绝、排序和保存结果保持不变。",
+      consumer: "现有 recordShopVisit 调用方与 characterization tests",
+      compatibility: "先通过记录路径特征测试，再让原入口委派给批准的记录用例；JSON 不迁移。",
+      rollback: "独立 Git 提交；revert S1 即恢复原记录流程。",
+    },
+    {
+      ...validStructuredPlan.slices[0],
+      id: "S2",
+      title: "按日查询路径迁入批准模型",
+      outcome: "listDailyVisits 的身份拒绝、严格筛选和顺序保持不变。",
+      consumer: "现有 listDailyVisits 调用方与 characterization tests",
+      dependsOn: ["S1"],
+      compatibility: "复用 S1 已验证的仓储端口，原查询入口只进行委派。",
+      rollback: "独立 Git 提交；revert S2 只恢复原查询流程。",
+    },
+  ],
+}
+
 test("structured delivery plan compiles OpenSpec artifacts and an executable slice graph", () => {
   const plan = normalizeStructuredPlan(validStructuredPlan)
   assert.deepEqual(validateStructuredPlan(plan), [])
@@ -75,6 +107,26 @@ test("structured delivery plan compiles OpenSpec artifacts and an executable sli
   assert.match(compiled.specs[0].content, /#### Scenario:/u)
   assert.match(compiled.tasks, /- \[ \] 1\.1 \[S1\]/u)
   assert.equal(compiled.roadmap.slices[0].status, "planned")
+})
+
+test("refactor delivery evidence is derived from typed slices and compiles all migration obligations", () => {
+  const plan = normalizeStructuredPlan(refactorRoadmapRegressionPlan)
+  assert.deepEqual(validateStructuredPlan(plan), [])
+  assert.deepEqual(deliveryPlanSemanticEvidence(plan, { workflowType: "refactor-system" }), {
+    sliceCount: 2,
+    migrationVerticalSlices: true,
+    behaviorProtection: true,
+    independentRollback: true,
+  })
+  const compiled = compileDeliveryMilestoneSections(plan, "legacy-shop-access-records-refactor", {}, {
+    workflowType: "refactor-system",
+  })
+  const candidate = Object.values(compiled.sections).join("\n")
+  for (const concept of ["迁移纵向切片", "行为保护与回滚", "model-contract.json", "模块—层—依赖机器合同", "架构验证命令", "OpenSpec change 映射"]) {
+    assert.equal(containsRequiredConcept(candidate, concept), true, `missing ${concept}`)
+  }
+  assert.match(compiled.sections["纵向交付切片"], /plan\.slices/u)
+  assert.match(compiled.sections["风险、迁移与上线"], /行为保护字段完整；独立回滚字段完整/u)
 })
 
 test("structured delivery plan returns all graph and business-contract findings together", () => {
@@ -143,6 +195,78 @@ test("model contract extraction accepts colon and Markdown-list invariant forms"
     { id: "INV-01", statement: "每次成功查看恰好一条记录" },
     { id: "INV-02", statement: "重复查看逐条保留" },
   ])
+})
+
+test("model contract extraction accepts the original refactor prose without format-only rewrites", () => {
+  const contract = extractApprovedModelContract([
+    "ME-01 `VisitKey` 值对象：严格保存 userId、shopId、day。ME-02: DailyShopVisit 聚合根。",
+    "ME-03 访问时刻值对象；ME-04 访问日志仓储抽象；ME-05 记录店铺访问应用服务。",
+    "INV-01 同键最多一个事实；INV-02：最早访问时间只能保持或提前。",
+    "ME-99 和 ME-98 仅是普通追踪引用，不是模型定义。",
+    "唯一有意例外是 ME-04 的批量端口；INV-01 由 ME-01 与 ME-04 共同保护。",
+  ].join("\n"))
+  assert.deepEqual(contract.modelElements, [
+    { id: "ME-01", name: "VisitKey" },
+    { id: "ME-02", name: "DailyShopVisit" },
+    { id: "ME-03", name: "访问时刻" },
+    { id: "ME-04", name: "访问日志" },
+    { id: "ME-05", name: "记录店铺访问" },
+  ])
+  assert.deepEqual(contract.invariants, [
+    { id: "INV-01", statement: "同键最多一个事实" },
+    { id: "INV-02", statement: "最早访问时间只能保持或提前" },
+  ])
+})
+
+test("model contract extraction accepts a typed embedded JSON contract", () => {
+  const contract = extractApprovedModelContract([
+    "model-contract",
+    "```json",
+    JSON.stringify({ modelElements: [{ id: "ME-01", name: "访问日志" }], invariants: [{ id: "INV-01", statement: "同一用户同店同日最多一条访问事实" }] }),
+    "```",
+  ].join("\n"))
+  assert.deepEqual(contract.modelElements, [{ id: "ME-01", name: "访问日志" }])
+  assert.deepEqual(contract.invariants, [{ id: "INV-01", statement: "同一用户同店同日最多一条访问事实" }])
+})
+
+test("refactor milestone IV approval materializes Chinese typed model names without a format-only revision", async () => {
+  const dir = await freshProject()
+  try {
+    await initialize({ workflowType: "refactor-system", workflowId: "chinese-model-contract", projectRoot: dir,
+      title: "访问日志重构", request: "保持现有行为并迁移访问日志模型" })
+    const root = path.join(dir, "openspec", "changes", "chinese-model-contract", "ddd")
+    const stateFile = path.join(root, ".ddd", "workflow-state.json")
+    const state = JSON.parse(await readFile(stateFile, "utf8"))
+    state.currentStage = "06-pilot-tactical-design"
+    state.checkpoints.push({ checkpointId: 4, stage: "06-pilot-tactical-design", milestone: "IV", summary: longSummary,
+      status: "awaiting_review", reviewTitle: "确认试点服务的领域模型", reviewChecklist: [], adviceRequired: true,
+      document: "milestoneIV", completedAt: new Date().toISOString() })
+    await writeFile(stateFile, JSON.stringify(state), "utf8")
+    await writeFile(path.join(root, "IV-tactical-design.md"), [
+      "# 里程碑 IV：战术设计",
+      "",
+      "## 领域模型设计",
+      "ME-01 访问日志聚合根；ME-02 访问记录实体；ME-03 首次访问时间值对象；ME-04 访问日志仓储抽象；ME-05 记录店铺访问应用服务；INV-01 去重；INV-02 最早时间。",
+      "",
+      "## 证据与追踪",
+      "上述稳定编号均来自本轮已批准战术设计。",
+      "",
+    ].join("\n"), "utf8")
+
+    await review({ workflowType: "refactor-system", workflowId: "chinese-model-contract", projectRoot: dir,
+      stage: "06-pilot-tactical-design", decision: "approve", reviewer: "tester" })
+    const contract = JSON.parse(await readFile(path.join(root, "model-contract.json"), "utf8"))
+    assert.deepEqual(contract.modelElements.map(({ id, name }) => ({ id, name })), [
+      { id: "ME-01", name: "访问日志" },
+      { id: "ME-02", name: "访问记录" },
+      { id: "ME-03", name: "首次访问时间" },
+      { id: "ME-04", name: "访问日志" },
+      { id: "ME-05", name: "记录店铺访问" },
+    ])
+    assert.deepEqual(contract.invariants, [{ id: "INV-02", statement: "最早时间" }])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 async function freshProject() {
@@ -231,6 +355,38 @@ test("openspec-plan compiles a structured plan and binds the approved slice grap
     const milestoneText = await readFile(path.join(root, "V-delivery-plan.md"), "utf8")
     assert.match(milestoneText, /运行时从已校验的结构化计划和批准模型合同确定性编译/u)
     await runOpenSpec(dir, ["validate", "structured-plan", "--strict"])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("refactor openspec-plan reaches milestone V from the typed two-slice migration plan", async () => {
+  const dir = await freshProject()
+  const context = { sessionID: "refactor-plan-regression", directory: dir, worktree: dir, abort: new AbortController().signal, metadata() {}, async ask() {} }
+  try {
+    await dddLifecycleTool.execute({ action: "init", workflow_type: "refactor-system", workflow_id: "legacy-shop-access-records-refactor",
+      input: { title: "遗留店铺访问记录重构", request: "保持全部公开行为，将店铺访问记录逐步迁入批准的 DDD 模型" } }, context)
+    const root = path.join(dir, "openspec", "changes", "legacy-shop-access-records-refactor", "ddd")
+    const stateFile = path.join(root, ".ddd", "workflow-state.json")
+    const state = JSON.parse(await readFile(stateFile, "utf8"))
+    state.checkpoints.push({ checkpointId: 4, stage: "06-pilot-tactical-design", milestone: "IV", summary: longSummary,
+      status: "approved", review: { decision: "approve", reviewer: "tester", reviewedAt: new Date().toISOString(), feedback: "" },
+      reviewChecklist: [], adviceRequired: false, document: "milestoneIV", completedAt: new Date().toISOString() })
+    state.currentStage = "06-pilot-tactical-design"
+    await writeFile(stateFile, JSON.stringify(state), "utf8")
+
+    const prepared = JSON.parse(await dddLifecycleTool.execute({ action: "prepare", input: {} }, context))
+    assert.equal(prepared.stageCard.stageId, "07-migration-roadmap")
+    const result = JSON.parse(await dddLifecycleTool.execute({ action: "openspec-plan", plan: refactorRoadmapRegressionPlan }, context))
+    assert.equal(result.status, "ready", JSON.stringify(result, null, 2))
+    assert.equal(result.plannedSlices, 2)
+    const milestone = JSON.parse(await dddLifecycleTool.execute({ action: "complete-stage", input: {} }, context))
+    assert.equal(milestone.humanReviewRequired, true, JSON.stringify(milestone, null, 2))
+    assert.equal(milestone.milestoneRoman, "V")
+    assert.ok(!(milestone.findings ?? []).some((finding) => finding.code === "REQUIRED_CONTENT_MISSING"), JSON.stringify(milestone, null, 2))
+    const milestoneText = await readFile(path.join(root, "V-delivery-plan.md"), "utf8")
+    assert.match(milestoneText, /迁移纵向切片/u)
+    assert.match(milestoneText, /行为保护与回滚/u)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -680,6 +836,13 @@ test("submit blocks a stage that is not allowed by the transition", async () => 
       stage: "02-big-picture-event-storm", summary: longSummary,
       sections: { "战略事件风暴": "用户提交请求后业务受理并形成结果。" } })
     assert.ok(r.findings.some((f) => f.code === "STAGE_NOT_ALLOWED" && f.severity === "blocking"))
+    assert.equal(r.draft.saved, false)
+    assert.equal(r.draft.retryableByModel, false)
+    assert.equal(r.draft.mustStop, true)
+    await assert.rejects(
+      readFile(path.join(dir, "openspec", "changes", "order", "ddd", ".ddd", "workbench", "02-big-picture-event-storm.draft.json"), "utf8"),
+      { code: "ENOENT" },
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -920,6 +1083,24 @@ test("strategic event storm rejects standalone English query-result event names"
   assert.ok(hits.includes("DailyTrailQueried"))
 })
 
+test("strategic event storm keeps real command events after an explicit query result", () => {
+  const eventStorm = [
+    "社区用户 → `查看活动报名信息`（查询）→ `returns 活动报名概览` → `报名活动`（命令）→ `emits 用户已报名活动`。",
+    "已报名用户 → `查看我的报名状态`（查询）→ `returns 用户活动报名状态`（读模型）→ `取消报名`（命令）→ `emits 用户已取消活动报名`。",
+  ].join("\n")
+  const hits = queryPseudoEvents(eventStorm)
+  assert.deepEqual(hits, [])
+  const findings = validateStageSemantics(
+    { originalRequest: "支持用户报名与取消报名" },
+    { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } },
+    { summary: "形成报名状态变化时间线。", sections: { "战略事件风暴": eventStorm } },
+  )
+  assert.ok(!findings.some((finding) => finding.code === "STRATEGIC_EVENT_NOT_STATE_CHANGE"))
+
+  const pseudo = queryPseudoEvents("用户 → 查询活动 → emits 活动详情已返回")
+  assert.ok(pseudo.includes("活动详情已返回"))
+})
+
 test("strategic event storm rejects a returned trail marked with the event icon", async () => {
   const dir = await freshProject()
   try {
@@ -1029,6 +1210,47 @@ test("strategic intent guard distinguishes recommended choices from recommendati
   assert.ok(capability.some((finding) => finding.code === "INTENT_CAPABILITY_EXPANSION"))
 })
 
+test("strategic intent guard treats excluded payment as a non-capability", () => {
+  const excluded = validateStageSemantics(
+    { originalRequest: "从零创建社区活动报名系统，支持活动发布、用户报名、取消报名和名额约束" },
+    { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } },
+    {
+      summary: "形成活动发布、报名、取消和名额约束的业务时间线。",
+      sections: {
+        "一页结论": "当前目标只有活动发布、报名、取消和名额约束。支付、审核和通知只作为未来机会或热点，不进入首期主流程。",
+        "业务主题与分析范围": "原始范围未给出支付或外部支付系统，不得凭空纳入。",
+        "热点与边界线索": "本轮有意遗漏支付、候补与签到，它们均不纳入本次交付。",
+      },
+    },
+  )
+  assert.ok(!excluded.some((finding) => finding.code === "INTENT_CAPABILITY_EXPANSION"))
+
+  const positive = validateStageSemantics(
+    { originalRequest: "从零创建社区活动报名系统，支持活动发布、用户报名、取消报名和名额约束" },
+    { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } },
+    { summary: "本期增加在线支付能力。", sections: { "一页结论": "报名成功后进入支付主流程并以支付成功作为验收结果。" } },
+  )
+  assert.ok(positive.some((finding) => finding.code === "INTENT_CAPABILITY_EXPANSION" && finding.message.includes("支付")))
+})
+
+test("strategic intent guard allows capacity-derived registration counts but not unrelated counting", () => {
+  const state = { originalRequest: "从零创建社区活动报名系统，支持活动发布、用户报名、取消报名和名额约束" }
+  const stage = { id: "06-service-use-cases", scopeContract: { id: "system-strategy" } }
+  const capacityCount = validateStageSemantics(state, stage, {
+    summary: "形成活动报名用例包，落实名额约束。",
+    sections: {
+      "实现单元用例包": "发布活动时报名计数从 0 开始。报名成功后计数加一；满员拒绝时计数不变；取消报名后计数减一并释放名额。",
+    },
+  })
+  assert.ok(!capacityCount.some((finding) => finding.code === "INTENT_CAPABILITY_EXPANSION"))
+
+  const unrelatedCount = validateStageSemantics(state, stage, {
+    summary: "额外交付用户内容分析。",
+    sections: { "实现单元用例包": "新增按日浏览计数能力，并把浏览计数结果作为验收输出。" },
+  })
+  assert.ok(unrelatedCount.some((finding) => finding.code === "INTENT_CAPABILITY_EXPANSION" && finding.message.includes("计数")))
+})
+
 test("strategic event storm does not hide technical design behind current or future category labels", () => {
   const findings = validateStageSemantics(
     { originalRequest: "当用户主动签到后记录光顾，并返回当日轨迹" },
@@ -1094,6 +1316,7 @@ test("plugin installs a bounded DDD command agent with noisy tools disabled", as
   assert.equal(config.agent["ddd-workflow"].maxSteps, 30)
   assert.equal(config.agent["ddd-workflow"].tools.subagent, false)
   assert.equal(config.agent["ddd-workflow"].tools.workflow_run, false)
+  assert.equal(config.agent["ddd-workflow"].tools.skill_eval, false)
   assert.match(config.command.ddd.template, /action=complete-stage/)
   assert.deepEqual(Object.keys(plugin.tool), ["ddd_lifecycle"])
   assert.equal(config.mcp, undefined)
@@ -1157,8 +1380,10 @@ test("Mobile chat hook binds the exact slash-command request when command hook i
     messageOutput,
   )
   assert.equal(messageOutput.message.tools.subagent, false)
+  assert.equal(messageOutput.message.tools.skill_eval, false)
   assert.equal(messageOutput.message.tools.read, false)
-  assert.equal(messageOutput.message.tools.ddd_lifecycle, undefined)
+  assert.equal(messageOutput.message.tools.ddd_lifecycle, true)
+  assert.equal(messageOutput.message.tools.skill, true)
   const hookOutput = {
     args: {
       action: "init",
@@ -1169,6 +1394,27 @@ test("Mobile chat hook binds the exact slash-command request when command hook i
   }
   await plugin["tool.execute.before"]({ tool: "ddd_lifecycle", sessionID, callID: "init" }, hookOutput)
   assert.deepEqual(hookOutput.args.input, { title: "用户轨迹", request: original })
+})
+
+test("Mobile physically hides engineering tools from every ddd-workflow turn after slash expansion", async () => {
+  const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
+  const messageOutput = {
+    message: {},
+    // Mobile expands /ddd before chat.message, so this deliberately contains
+    // no literal slash command and cannot rely on dddRequestFromMessage.
+    parts: [{ type: "text", text: "Load ddd-orchestrate and continue to the next human gate." }],
+  }
+  await plugin["chat.message"]({ sessionID: "expanded-command-mask", agent: "ddd-workflow" }, messageOutput)
+  assert.equal(messageOutput.message.tools.read, false)
+  assert.equal(messageOutput.message.tools.bash, false)
+  assert.equal(messageOutput.message.tools.ls, false)
+  assert.equal(messageOutput.message.tools.mcp, false)
+  assert.equal(messageOutput.message.tools.write, false)
+  assert.equal(messageOutput.message.tools.subagent, false)
+
+  const codingOutput = { message: {}, parts: [{ type: "text", text: "批准" }] }
+  await plugin["chat.message"]({ sessionID: "coding-command-tools", agent: "ddd-coding" }, codingOutput)
+  assert.equal(codingOutput.message.tools, undefined)
 })
 
 test("direct lifecycle init remains compatible when no DDD command request is bound", async () => {
@@ -1364,6 +1610,78 @@ test("persisted session binding blocks Mobile fallback tools after in-memory hoo
       ),
       /DDD_LIFECYCLE_ONLY/,
     )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("recreated Mobile process fails closed at a human gate before its first Read or Bash", async () => {
+  const dir = await freshProject()
+  const sessionID = "persisted-human-gate-guard"
+  const context = {
+    sessionID, messageID: "message", agent: "ddd-workflow", directory: dir, worktree: dir,
+    abort: new AbortController().signal, metadata() {}, async ask() {},
+  }
+  try {
+    await dddLifecycleTool.execute({ action: "init", workflow_type: "add-feature", workflow_id: "human-gate-guard",
+      input: { title: "跨进程人工门", request: "新增访问轨迹" } }, context)
+    await completeMilestoneI(dir, "human-gate-guard")
+    const stateFile = path.join(dir, "openspec", "changes", "human-gate-guard", "ddd", ".ddd", "workflow-state.json")
+    const state = JSON.parse(await readFile(stateFile, "utf8"))
+    assert.equal(state.preparedStage, undefined)
+    assert.equal(state.checkpoints.at(-1).status, "awaiting_review")
+
+    // Mobile starts a fresh process for the next human response. `worktree`
+    // may be broader than `directory`, so recovery must inspect both roots.
+    const recreated = await DddWorkflowPlugin({ directory: dir, worktree: path.dirname(dir) })
+    await assert.rejects(
+      recreated["tool.execute.before"](
+        { tool: "Read", sessionID, callID: "first-read" },
+        { args: { filePath: path.join(dir, "openspec", "changes", "human-gate-guard", "ddd", "I-strategic-eventstorm.md") } },
+      ),
+      /DDD_LIFECYCLE_ONLY/,
+    )
+    await assert.rejects(
+      recreated["tool.execute.before"](
+        { tool: "Bash", sessionID, callID: "first-bash" },
+        { args: { command: "find openspec -type f" } },
+      ),
+      /DDD_LIFECYCLE_ONLY/,
+    )
+
+    const approvalMessage = { message: {}, parts: [{ type: "text", text: "批准" }] }
+    await recreated["chat.message"]({ sessionID, agent: "ddd-workflow" }, approvalMessage)
+    assert.equal(approvalMessage.message.tools.read, false)
+    assert.equal(approvalMessage.message.tools.bash, false)
+    assert.equal(approvalMessage.message.tools.skill_run_script, false)
+    assert.equal(approvalMessage.message.tools.skill_eval, false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("review runtime failures return a self-contained stop contract instead of inviting source exploration", async () => {
+  const dir = await freshProject()
+  const sessionID = "review-repair-contract"
+  const context = {
+    sessionID, messageID: "message", agent: "ddd-workflow", directory: dir, worktree: dir,
+    abort: new AbortController().signal, metadata() {}, async ask() {},
+  }
+  try {
+    await dddLifecycleTool.execute({ action: "init", workflow_type: "add-feature", workflow_id: "review-contract",
+      input: { title: "人工门错误合同", request: "新增访问轨迹" } }, context)
+    await completeMilestoneI(dir, "review-contract")
+    const document = path.join(dir, "openspec", "changes", "review-contract", "ddd", "I-strategic-eventstorm.md")
+    await writeFile(document, (await readFile(document, "utf8")).replace("## 一页结论", "## 一页结论\n\n_待填写_"), "utf8")
+    const result = JSON.parse(await dddLifecycleTool.execute({
+      action: "review", input: { decision: "approve", reviewer: "human" },
+    }, context))
+    assert.equal(result.retryableByModel, false)
+    assert.equal(result.mustStop, true)
+    assert.equal(result.stopReason, "human-gate-contract-failed")
+    assert.deepEqual(result.repairContract.allowedTools, ["ddd_lifecycle"])
+    assert.match(result.repairContract.nextAction, /原样向用户报告/u)
+    assert.match(result.repairContract.nextAction, /不得自行把批准改为退回/u)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -1654,6 +1972,19 @@ test("implementation stage hook rejects subagents and tool downloads", async () 
     plugin["tool.execute.before"]({ tool: "bash", sessionID, callID: "download" },
       { args: { command: "powershell Invoke-WebRequest https://example.invalid/apache-maven.zip" } }),
     /DDD_IMPLEMENTATION_BOOTSTRAP_DENIED/,
+  )
+})
+
+test("ddd-coding cannot use repository tools before lifecycle review and prepare", async () => {
+  const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
+  const sessionID = "coding-first-call-gate"
+  await plugin["command.execute.before"]({ command: "ddd-code", sessionID }, {})
+  await assert.rejects(
+    plugin["tool.execute.before"](
+      { tool: "read", sessionID, callID: "premature-read" },
+      { args: { filePath: "src/main/App.java" } },
+    ),
+    /DDD_LIFECYCLE_ONLY/,
   )
 })
 
