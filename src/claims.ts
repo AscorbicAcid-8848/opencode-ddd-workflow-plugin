@@ -39,7 +39,7 @@ const finding = (code: string, pathValue: string, message: string, suggestion?: 
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && Boolean(value.trim())
 const observationLevels = new Set(["declared", "wired", "statically-reachable", "runtime-observed", "test-verified"])
 const availabilities = new Set(["operational", "partial", "stub", "absent", "unknown"])
-const absencePattern = /(?:^|(?:当前|现有|既有|代码|系统|仓库|能力|实现|定义|证据|路径|接口|表))[^。；]{0,18}(?:不存在|未发现|尚无|没有|无专门)|(?:只有|仅有)[^。；]{0,30}(?:能力|实现|路径|接口|表|模块)/u
+const absencePattern = /(?:^|(?:当前|现有|既有|代码|系统|仓库|能力|实现|定义|证据|路径|接口|表))[^。；]{0,18}(?:不存在|未发现|尚无|没有|无专门)|(?:只有|仅有)[^。；]{0,30}(?:能力|实现|路径|接口|表|模块)|(?:属于|为|视为)全新(?:业务)?(?:能力|功能)/u
 const absenceMetaPattern = /(?:不存在|未发现|尚无|没有|无专门)[^。；]{0,20}(?:待确认|开放问题|问题|证据|信息|结论|决定|说明)/u
 const currentFactKinds = new Set(["current-behavior-fact", "current-topology-fact"])
 const currentAuthorityKinds = new Set([
@@ -256,6 +256,15 @@ export async function validateStageClaims(
         } else if (claim.statement.trim() !== authorization.statement) {
           findings.push(finding("SEARCH_EVIDENCE_SUBJECT_MISMATCH", `${base}.statement`,
             `该负向搜索 claim 必须逐字使用签发语句“${authorization.statement}”；不能追加能力、模块或实体不存在的推论。`))
+        } else {
+          if (claim.kind !== "evidence-gap" || claim.maturity !== "hypothesis") {
+            findings.push(finding("SEARCH_EVIDENCE_CLAIM_TYPE_INVALID", base,
+              "精确代码词未命中只是一条 evidence-gap/hypothesis，不能登记为当前行为事实或 operational 能力。"))
+          }
+          if (!Array.isArray(claim.authorityRefs) || !claim.authorityRefs.includes(reference)) {
+            findings.push(finding("SEARCH_EVIDENCE_AUTHORITY_MISMATCH", `${base}.authorityRefs`,
+              `负向搜索 claim 的 authorityRefs 必须包含同一个签发引用：${reference}。`))
+          }
         }
       }
       if (reference.startsWith("code:") && !issuedCodeRefs.has(reference)) {
@@ -272,6 +281,11 @@ export async function validateStageClaims(
     }
     const attributes = claim.attributes && typeof claim.attributes === "object" && !Array.isArray(claim.attributes)
       ? claim.attributes : {}
+    const signedSearchClaim = claim.evidenceRefs.some((reference) => authorizedSearch.has(reference))
+    if (signedSearchClaim && attributes.availability !== "unknown") {
+      findings.push(finding("SEARCH_EVIDENCE_AVAILABILITY_INVALID", `${base}.attributes.availability`,
+        "精确代码词未命中不能证明业务能力 absent；availability 必须保持 unknown。"))
+    }
     if (currentFactKinds.has(claim.kind)) {
       if (!observationLevels.has(String(attributes.observationLevel ?? ""))) {
         findings.push(finding("CLAIM_OBSERVATION_LEVEL_REQUIRED", `${base}.attributes.observationLevel`, "现状事实必须说明证据强度。"))
@@ -305,13 +319,24 @@ export async function validateStageClaims(
   ]
   for (const part of narrativeParts) {
     const signedSearchRefs = [...part.text.matchAll(/search:evidence-bundle:[A-Za-z0-9_-]+/gu)].map((match) => match[0])
-    const unmapped = [...new Set(signedSearchRefs.filter((reference) =>
-      !claims.some((claim) => claim.evidenceRefs.includes(reference))))]
+    const signedSearchStatements = [...authorizedSearch.entries()]
+      .filter(([, authorization]) => part.text.includes(authorization.statement)).map(([reference]) => reference)
+    const unmapped = [...new Set([...signedSearchRefs, ...signedSearchStatements].filter((reference) =>
+      !claims.some((claim) => claim.kind === "evidence-gap" && claim.maturity === "hypothesis"
+        && claim.evidenceRefs.includes(reference))))]
     if (unmapped.length) findings.push(finding(
       "UNMAPPED_SIGNED_SEARCH_EVIDENCE",
       part.path,
       `正文引用了 evidence-bundle 签发的负向搜索证据，但完整 claims 中没有对应 evidence-gap：${unmapped.join("、")}。`,
       "保留该证据的 typed claim 并逐字使用签发 statement，或同时删除正文中的该引用；不得只删 claim。",
+    ))
+    const proseCodeRefs = [...part.text.matchAll(/code:[A-Za-z0-9_./\\-]+#L\d+-L\d+/gu)].map((match) => match[0])
+    const unissuedCodeRefs = [...new Set(proseCodeRefs.filter((reference) => !issuedCodeRefs.has(reference)))]
+    if (unissuedCodeRefs.length) findings.push(finding(
+      "PROSE_CODE_EVIDENCE_NOT_ISSUED",
+      part.path,
+      `正文使用了 evidence-bundle 未签发或自行扩大的代码范围：${unissuedCodeRefs.join("、")}。`,
+      "逐字使用 evidence-bundle 返回的 excerpt.ref；正文和 typed claim 适用同一证据边界。",
     ))
   }
   for (const part of narrativeParts) for (const sentence of sentences(part.text)) {

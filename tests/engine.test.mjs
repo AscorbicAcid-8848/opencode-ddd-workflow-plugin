@@ -910,6 +910,79 @@ test("signed negative search prose cannot outlive its typed evidence-gap claim",
   }
 })
 
+test("signed negative search statement cannot outlive its typed claim when prose omits the ref", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "signed-search-statement-link"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
+    const payload = baselinePayload()
+    payload.sections["证据与追踪"] += `\n\n${packet.negativeSearchEvidence.statement}`
+    const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "UNMAPPED_SIGNED_SEARCH_EVIDENCE"
+      && finding.path === "sections.证据与追踪"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("signed negative search must remain a hypothesis with unknown availability", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "signed-search-type"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
+    const statement = packet.negativeSearchEvidence.statement
+    const payload = baselinePayload()
+    payload.sections["证据与追踪"] += `\n\n${statement}`
+    payload.claims.push({
+      id: "FACT-WRONG-SEARCH", kind: "current-behavior-fact", statement, maturity: "fact",
+      documentSection: "证据与追踪", authorityRefs: [packet.negativeSearchEvidence.ref],
+      evidenceRefs: [packet.negativeSearchEvidence.ref],
+      attributes: { observationLevel: "statically-reachable", availability: "operational", evidenceSubject: statement },
+    })
+    const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "SEARCH_EVIDENCE_CLAIM_TYPE_INVALID"))
+    assert.ok(result.findings.some((finding) => finding.code === "SEARCH_EVIDENCE_AVAILABILITY_INVALID"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("prose code citations cannot widen evidence-bundle line ranges", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "prose-code-range"
+    await mkdir(path.join(dir, "src"), { recursive: true })
+    await writeFile(path.join(dir, "src", "app.js"), "export function findShop(id) { return id ? { id } : null }\n", "utf8")
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    await evidenceBundle(dir, workflowId, ["findShop", "Shop"])
+    const payload = baselinePayload()
+    payload.sections["证据与追踪"] += "\n\n现状代码证据索引：code:src/app.js#L1-L999。"
+    const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "PROSE_CODE_EVIDENCE_NOT_ISSUED"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("exact-term negative search cannot be widened into a completely new capability claim", async () => {
+  const dir = await freshProject()
+  try {
+    await initialize({ workflowType: "add-feature", workflowId: "new-capability-inference", projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const payload = baselinePayload()
+    payload.sections["证据与追踪"] += "\n\n新增能力为全新能力。"
+    const result = await submit({ workflowType: "add-feature", workflowId: "new-capability-inference", projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "UNMAPPED_ABSENCE_ASSERTION"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test("evidence stage permits a design-looking sentence when it is an explicit evidence gap", async () => {
   const dir = await freshProject()
   try {
@@ -2101,6 +2174,26 @@ test("evidence bundle returns bounded cited excerpts and OpenSpec index", async 
       text: "L3: 用户自有数据必须通过 JsonFileStore 持久化。",
     }])
     assert.deepEqual(packet.openSpecIndex.currentSpecs, ["current-shop"])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("evidence bundle keeps the branch outcome immediately after a loaded entity", async () => {
+  const dir = await freshProject()
+  try {
+    const source = path.join(dir, "src", "app.js")
+    await mkdir(path.dirname(source), { recursive: true })
+    await writeFile(source, [
+      "export function handler(request, response) {",
+      "  if (!request.user) return reply(response, 401, { error: 'authentication_required' })",
+      "  const shop = shops.get(request.id)",
+      "  return shop ? reply(response, 200, shop) : reply(response, 404, { error: 'shop_not_found' })",
+      "}",
+    ].join("\n"), "utf8")
+    const packet = await evidenceBundle(dir, "branch-outcome", ["Shop", "User"])
+    const issued = packet.matches.flatMap((match) => match.excerpts)
+    assert.ok(issued.some((excerpt) => excerpt.text.includes("const shop") && excerpt.text.includes("shop_not_found")))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

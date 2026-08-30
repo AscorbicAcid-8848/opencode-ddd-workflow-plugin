@@ -106,8 +106,12 @@ export async function evidenceBundle(projectRoot, workflowId, rawTerms) {
             chosen.push(candidate.index);
         }
         const excerpts = chosen.sort((a, b) => a - b).map((index) => {
-            const from = Math.max(0, index - 1);
-            const to = Math.min(lines.length, index + 2);
+            // A three-line window routinely separated a load from the immediately
+            // following branch outcome (for example `const shop = ...` on one line
+            // and `shop_not_found` on the next). Five bounded lines preserve that
+            // control-flow fact without reopening free repository exploration.
+            const from = Math.max(0, index - 2);
+            const to = Math.min(lines.length, index + 3);
             const fileRef = file.replace(/\\/gu, "/");
             return {
                 ref: `code:${fileRef}#L${from + 1}-L${to}`,
