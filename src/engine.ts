@@ -8,7 +8,7 @@ import { candidateDocument, documentSections, publishSections, documentPath, wri
 import { newChange, writeLink, verifyArchive, runOpenSpec, openSpecAction, planningArtifacts } from "./openspec.js"
 import type {
   Identity, WorkflowProfile, WorkflowState, Checkpoint, Transition,
-  ReviewDecision, OpenSpecArtifact, ValidationFinding, HumanDecisionResolution,
+  ReviewDecision, OpenSpecArtifact, ValidationFinding, HumanDecisionResolution, DecisionItem,
 } from "./types.js"
 import { WorkflowError } from "./types.js"
 import { claimContractFor, validateStageClaims } from "./claims.js"
@@ -21,6 +21,7 @@ export interface SubmitInput extends Identity {
   sections: Record<string, string>
   claims?: unknown
   ambiguityResolution?: unknown
+  decisionItems?: unknown
   plannedSlices?: number
   sliceId?: string
   finalize?: boolean
@@ -42,6 +43,160 @@ export function requiresScenarioClarification(request: string): boolean {
     || /\b(?:when|if|after|before)\b[^.\n]{1,80}\b(?:then|return|record|display)\b/iu.test(text)
     || /\b(?:must|shall|must not|may only)\b/iu.test(text)
   return !hasScenarioStructure && text.length < 48
+}
+
+const DECISION_LEDGER_SCOPES = new Set(["system-discovery", "system-strategy", "context-discovery", "context-tactical-design"])
+const DECISION_SOURCE_PREFIX = /^(?:user-input|code|schema|test|runtime|openspec|git|search|decision):/u
+
+function normalizedDecisionItems(raw: unknown, stageId: string): DecisionItem[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  return raw.map((item: any) => ({
+    id: String(item?.id ?? "").trim(),
+    ownerStage: stageId,
+    question: String(item?.question ?? "").trim(),
+    options: (Array.isArray(item?.options) ? item.options : []).map((option: any) => ({
+      id: String(option?.id ?? "").trim(),
+      label: String(option?.label ?? "").trim(),
+      ...(String(option?.impact ?? "").trim() ? { impact: String(option.impact).trim() } : {}),
+    })),
+    ...(String(item?.recommendationId ?? "").trim() ? { recommendationId: String(item.recommendationId).trim() } : {}),
+    status: ["open", "deferred", "out-of-scope"].includes(String(item?.status ?? "")) ? item.status : "open",
+    blocks: (Array.isArray(item?.blocks) ? item.blocks : []).map(String).map((value: string) => value.trim()).filter(Boolean),
+    sourceRefs: (Array.isArray(item?.sourceRefs) ? item.sourceRefs : []).map(String).map((value: string) => value.trim()).filter(Boolean),
+    ...(String(item?.deferredToStage ?? "").trim() ? { deferredToStage: String(item.deferredToStage).trim() } : {}),
+  })) as DecisionItem[]
+}
+
+function legacyDecisionItems(ambiguity: any, stageId: string, sections: Record<string, string>): DecisionItem[] | undefined {
+  if (ambiguity?.status !== "unresolved" || !Array.isArray(ambiguity?.candidates) || ambiguity.candidates.length === 0) return undefined
+  const options = ambiguity.candidates.map((candidate: any) => ({
+    id: String(candidate?.id ?? "").trim(), label: String(candidate?.label ?? "").trim(),
+  })).filter((option: any) => option.id && option.label)
+  const explicit = String(ambiguity?.recommendedCandidateId ?? "").trim()
+  const advisory = [sections["本次请您确认"] ?? "", sections["备选解释与建议"] ?? "", sections["备选战略方案与建议"] ?? ""].join("\n")
+  const mentioned = options.filter((option: any) => {
+    if (/推荐/u.test(option.label)) return true
+    const escaped = option.id.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+    return new RegExp(`(?:推荐[^。；\\n]{0,30}${escaped}|${escaped}[^。；\\n]{0,30}推荐)`, "iu").test(advisory)
+  })
+  const recommendationId = explicit || (mentioned.length === 1 ? mentioned[0].id : "")
+  const affected = Array.isArray(ambiguity?.affectedDecisions) ? ambiguity.affectedDecisions.map(String).filter(Boolean) : []
+  return [{
+    id: `DEC-${stageId.toUpperCase()}`,
+    ownerStage: stageId,
+    question: affected.length ? affected.join("；") : "请选择本里程碑的业务解释",
+    options,
+    ...(recommendationId ? { recommendationId } : {}),
+    status: "open",
+    blocks: affected.length ? affected : ["当前里程碑唯一结论"],
+    sourceRefs: ["user-input:original-request"],
+  }]
+}
+
+export function renderDecisionReviewSection(items: DecisionItem[]): string {
+  const open = items.filter((item) => item.status === "open")
+  const deferred = items.filter((item) => item.status !== "open")
+  const lines = open.length ? [
+    "以下决策尚需人工选择；正文中被 blocks 指向的结论在批准前不具有权威性：",
+    ...open.flatMap((item) => [
+      `### ${item.id} ${item.question}`,
+      ...item.options.map((option) => `- ${option.id}${item.recommendationId === option.id ? "（推荐）" : ""}：${option.label}${option.impact ? `；影响：${option.impact}` : ""}`),
+      `- blocks：${item.blocks.join("、")}`,
+    ]),
+  ] : [
+    "本阶段没有待选择的业务决策。",
+    "回复“批准”表示接受本文正文中的完整方案；如有不符合业务认知之处，请回复“修改：...”。",
+  ]
+  if (deferred.length) lines.push("", "### 已明确延期或排除", ...deferred.map((item) => `- ${item.id}：${item.question}（${item.status}）`))
+  return lines.join("\n")
+}
+
+export function validateHumanDecisionContract(
+  state: WorkflowState,
+  stage: any,
+  sections: Record<string, string>,
+  decisionItems: unknown,
+): ValidationFinding[] {
+  if (!stage.humanGate || !DECISION_LEDGER_SCOPES.has(stage.scopeContract?.id ?? "")) return []
+  const findings: ValidationFinding[] = []
+  const items = normalizedDecisionItems(decisionItems, stage.id)
+  if (!items) return [{
+    code: "DECISION_ITEMS_REQUIRED", path: "decisionItems", severity: "blocking",
+    message: "DDD 建模里程碑必须显式提交 decisionItems 数组；没有待选择项时提交空数组。审核区由运行时生成，禁止依赖自由 Markdown 猜测人类决策。",
+  }]
+  const ids = new Set<string>()
+  const prior = new Map((state.decisionLedger ?? []).map((item) => [item.id, item]))
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]
+    const base = `decisionItems[${index}]`
+    if (!/^[A-Za-z][A-Za-z0-9._-]{2,80}$/u.test(item.id)) findings.push({ code: "DECISION_ID_INVALID", path: `${base}.id`, severity: "blocking", message: "决策 id 必须稳定、唯一且可跨里程碑引用。" })
+    if (ids.has(item.id)) findings.push({ code: "DECISION_ID_DUPLICATED", path: `${base}.id`, severity: "blocking", message: `决策 id 重复：${item.id}。` })
+    ids.add(item.id)
+    if (!item.question) findings.push({ code: "DECISION_QUESTION_REQUIRED", path: `${base}.question`, severity: "blocking", message: "决策必须说明人类实际要选择的问题。" })
+    if (item.status === "open") {
+      const optionIds = new Set(item.options.map((option) => option.id))
+      if (item.options.length < 2 || item.options.length > 4 || optionIds.size !== item.options.length
+        || item.options.some((option) => !option.id || !option.label)) findings.push({
+        code: "DECISION_OPTIONS_INVALID", path: `${base}.options`, severity: "blocking",
+        message: "open 决策必须提供 2 至 4 个具有唯一 id 和可读 label 的完整选项。",
+      })
+      if (item.recommendationId && !optionIds.has(item.recommendationId)) findings.push({
+        code: "DECISION_RECOMMENDATION_INVALID", path: `${base}.recommendationId`, severity: "blocking",
+        message: "recommendationId 必须引用当前决策的一个真实 option id。",
+      })
+      if (!item.recommendationId) findings.push({
+        code: "DECISION_RECOMMENDATION_MISSING", path: `${base}.recommendationId`, severity: "warning",
+        message: "当前 open 决策没有唯一推荐项；普通‘批准’不会替人类随机选择。",
+      })
+    }
+    if (item.blocks.length === 0) findings.push({ code: "DECISION_BLOCKS_REQUIRED", path: `${base}.blocks`, severity: "blocking", message: "决策必须列出被阻塞的场景、规则、用例或模型稳定标识。" })
+    if (item.sourceRefs.length === 0 || item.sourceRefs.some((reference) => !DECISION_SOURCE_PREFIX.test(reference))) findings.push({
+      code: "DECISION_SOURCE_REQUIRED", path: `${base}.sourceRefs`, severity: "blocking",
+      message: "决策必须绑定 user-input/code/test/runtime/openspec/decision 等可追踪来源。",
+    })
+    if (prior.get(item.id)?.status === "resolved") findings.push({
+      code: "DECISION_ALREADY_RESOLVED", path: `${base}.id`, severity: "blocking",
+      message: `决策 ${item.id} 已在上游解决，当前阶段只能通过 decision:${item.id} 引用其结果；如需改变必须退回 ownerStage。`,
+    })
+  }
+  const openIds = items.filter((item) => item.status === "open").map((item) => item.id)
+  const unresolvedLines = Object.entries(sections)
+    .filter(([heading]) => !["本次请您确认", "输入场景与现状事实", "备选解释与建议", "备选战略方案与建议", "证据与追踪", "业务验收记录"].includes(heading))
+    .flatMap(([, value]) => value.split(/\r?\n/u))
+    .filter((line) => /[？?]|待确认(?:[：:]|为|是|$)|尚未决定|\bTBD\b|还是/u.test(line))
+    .filter((line) => !openIds.some((id) => line.includes(id)))
+  if (unresolvedLines.length) findings.push({
+    code: "UNTRACKED_OPEN_DECISION", path: "sections", severity: "blocking",
+    message: `正文存在未登记或未引用 decision id 的开放问题：${unresolvedLines.slice(0, 3).join("；")}。`,
+  })
+  return findings
+}
+
+export function validateExternalPartyEvidence(
+  state: WorkflowState,
+  stage: any,
+  sections: Record<string, string>,
+): ValidationFinding[] {
+  if (stage.scopeContract?.id !== "system-strategy") return []
+  const strategicText = Object.entries(sections)
+    .filter(([heading]) => !["证据与追踪", "业务验收记录"].includes(heading))
+    .map(([, value]) => value).join("\n")
+  const assertions = strategicText.split(/\r?\n/u).filter((line) =>
+    /(?:外部[^。；\n]{0,24}(?:身份|提供方|上游|系统|服务)|身份[^。；\n]{0,24}(?:外部上游|外部提供方))/u.test(line)
+    && !/(?:候选|假设|待确认|尚无证据|不能证明|不视为|不代表|非外部)/u.test(line))
+  if (!assertions.length) return []
+  const evidence = sections["证据与追踪"] ?? ""
+  const original = state.originalRequest ?? ""
+  const explicitEvidence = /boundaryEvidence\s*[：:]\s*(?!(?:无|待确认|未知)\b).{4,}/iu.test(evidence)
+  const userAuthorizedExternalParty = /(?:外部|第三方|微信|支付宝|OAuth|OIDC|SSO)[^。；\n]{0,30}(?:提供方|平台|系统|服务|身份|支付)/iu.test(original)
+  if (explicitEvidence || userAuthorizedExternalParty) return []
+  return [{
+    code: "STRATEGIC_EXTERNAL_PARTY_WITHOUT_BOUNDARY_EVIDENCE",
+    path: "sections.证据与追踪",
+    severity: "blocking",
+    message: `战略设计声明了系统边界外的参与方或上游，但没有提供 boundaryEvidence：${assertions.slice(0, 3).join("；")}。请求头、字段名或本地校验只能证明接口形态，不能证明存在外部系统。`,
+    suggestion: "若确有外部参与方，在证据章节写明 boundaryEvidence: <用户输入/运行时调用/独立部署证据>；否则将其建模为当前单体内部身份能力。",
+  }]
 }
 
 async function resolveRoot(id: Identity): Promise<{ root: string; profile: WorkflowProfile }> {
@@ -149,12 +304,20 @@ export async function prepare(input: PrepareInput): Promise<Transition & { stage
       rule: "本阶段只能细化原始请求与已批准上游决策；新增可观察业务能力必须先回到相应人工里程碑批准，禁止从 workflow_id、代码命名或技术可能性推断需求。",
     },
     approvedHumanDecisions: state.humanDecisions ?? [],
+    ...(stage.humanGate ? {
+      humanDecisionContract: {
+        rule: "必须提交 decisionItems 数组；没有待选择项时提交空数组。每个 open 决策使用稳定 id、2 至 4 个 options、recommendationId、blocks 和 sourceRefs。运行时独占生成‘本次请您确认’，正文开放问题必须引用对应 decision id。",
+        submitField: "complete-stage.input.decisionItems=[{id:'DEC-...',question:'...',options:[{id:'OPT-A',label:'...',impact:'...'},...],recommendationId:'OPT-A',status:'open',blocks:['场景/规则/用例/模型ID'],sourceRefs:['user-input:original-request']}]",
+        approvalMeaning: "用户回复‘批准’接受每个 open 决策的唯一推荐 option；若某项无推荐，review.resolution.selections 必须逐项给出 decisionId→optionId。已解决的 decision id 不得在下游重开。",
+      },
+      effectiveDecisions: (state.decisionLedger ?? []).filter((item) => item.status === "resolved"),
+    } : {}),
     ...(stage.scopeContract?.id === "system-discovery" && requiresScenarioClarification(state.originalRequest ?? "") ? {
       ambiguityContract: {
         requiresHumanChoice: true,
         reason: "原始请求只给出能力名称，未明确触发条件、业务结果或异常语义。",
         presentation: "只围绕直接阻塞本功能业务语义的 1 至 4 个高影响决策，给出 2 至 3 套完整候选解释及事件流。人工批准前，候选不得进入唯一主流程或已确认规则。",
-        submitField: "complete-stage.input.ambiguityResolution={status:'unresolved',candidates:[{id,label},{id,label}],affectedDecisions:['高影响决策及候选取值']}。affectedDecisions 最多 4 项。",
+        submitField: "使用 humanDecisionContract 的 decisionItems；每个开放决策用 blocks 指向被阻塞结论，并给出唯一 recommendationId。",
         forbids: [
           "把代码中的现有入口自动解释为新能力触发点",
           "把候选查询、记录、时间或权限规则写成已批准需求",
@@ -262,12 +425,17 @@ function conciseReviewText(value: string, limit = 320): string {
   return plain.length <= limit ? plain : `${plain.slice(0, limit)}…`
 }
 
-function humanReviewSummary(stage: any, milestone: any, summary: string, sections: Record<string, string>, ambiguity: any): string {
+function humanReviewSummary(stage: any, milestone: any, summary: string, sections: Record<string, string>, decisionItems: unknown): string {
   const hidden = new Set(["证据与追踪", "输入场景与现状事实", "业务验收记录"])
   const results = Object.entries(sections).filter(([heading, content]) => !hidden.has(heading) && content.trim())
     .slice(0, 5).map(([heading, content]) => `- ${heading}：${conciseReviewText(content)}`)
-  const candidates = ambiguity?.status === "unresolved" && Array.isArray(ambiguity.candidates)
-    ? ["", "需要选择的业务候选：", ...ambiguity.candidates.map((candidate: any) => `- ${candidate.id}：${candidate.label}`)] : []
+  const decisions = Array.isArray(decisionItems) ? decisionItems.filter((item: any) => item?.status === "open") : []
+  const candidates = decisions.length
+    ? ["", "需要选择的业务决策：", ...decisions.flatMap((item: any) => [
+      `- ${item.id}：${item.question}`,
+      ...(Array.isArray(item.options) ? item.options.map((option: any) =>
+        `  - ${option.id}${item.recommendationId === option.id ? "（推荐）" : ""}：${option.label}`) : []),
+    ])] : []
   return [
     `# 里程碑 ${milestone?.roman ?? "?"}：${stage.reviewTitle ?? milestone?.title ?? "人工验收"}`,
     "", `本阶段结论：${summary}`, "", "关键业务与设计结果：", ...results,
@@ -276,7 +444,7 @@ function humanReviewSummary(stage: any, milestone: any, summary: string, section
   ].join("\n")
 }
 
-type StageDraft = Pick<SubmitInput, "summary" | "sections" | "claims" | "ambiguityResolution" | "plannedSlices" | "sliceId"> & {
+type StageDraft = Pick<SubmitInput, "summary" | "sections" | "claims" | "ambiguityResolution" | "decisionItems" | "plannedSlices" | "sliceId"> & {
   validation?: { signature: string; repeated: number }
 }
 
@@ -340,6 +508,7 @@ async function mergeStageDraft(root: string, input: SubmitInput): Promise<Submit
     sections,
     claims,
     ambiguityResolution: input.ambiguityResolution ?? draft?.ambiguityResolution,
+    decisionItems: input.decisionItems ?? draft?.decisionItems,
     plannedSlices: input.plannedSlices ?? draft?.plannedSlices,
     sliceId: input.sliceId ?? draft?.sliceId,
   }
@@ -350,6 +519,16 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
   const state = await loadState(root)
   const stage = stageContract(profile, input.stage)
   const merged = await mergeStageDraft(root, input)
+  const stageWriters = profile.stages.filter((item) => item.document === stage.document)
+  const closesHumanMilestone = Boolean(stage.humanGate && stageWriters.at(-1)?.id === stage.id)
+  if (closesHumanMilestone && DECISION_LEDGER_SCOPES.has(stage.scopeContract?.id ?? "")) {
+    const items = normalizedDecisionItems(merged.decisionItems, stage.id)
+      ?? legacyDecisionItems(merged.ambiguityResolution, stage.id, merged.sections)
+    if (items) {
+      merged.decisionItems = items
+      merged.sections["本次请您确认"] = renderDecisionReviewSection(items)
+    }
+  }
   const partial = input.finalize === false
   const findings = await validateSubmission(root, profile, state, stage, merged, { partial })
   if (findings.some((f) => f.severity === "blocking")) {
@@ -391,6 +570,7 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
     await writeJson(file, {
       summary: merged.summary, sections: safeSections, claims: safeClaims,
       ambiguityResolution: merged.ambiguityResolution,
+      decisionItems: merged.decisionItems,
       plannedSlices: merged.plannedSlices, sliceId: merged.sliceId,
       validation: { signature, repeated },
     } satisfies StageDraft)
@@ -413,6 +593,7 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
     await writeJson(stageDraftPath(root, stage.id), {
       summary: merged.summary, sections: merged.sections, claims: merged.claims,
       ambiguityResolution: merged.ambiguityResolution,
+      decisionItems: merged.decisionItems,
       plannedSlices: merged.plannedSlices, sliceId: merged.sliceId,
     } satisfies StageDraft)
     const allowed = writableHeadingsForStage(stage)
@@ -452,8 +633,9 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
     plannedSlices: merged.plannedSlices,
     sliceId: merged.sliceId,
     ambiguityResolution: merged.ambiguityResolution,
+    decisionItems: normalizedDecisionItems(merged.decisionItems, stage.id),
     humanReviewSummary: stage.humanGate && isLastWriter
-      ? humanReviewSummary(stage, milestone, merged.summary, merged.sections, merged.ambiguityResolution) : undefined,
+      ? humanReviewSummary(stage, milestone, merged.summary, merged.sections, merged.decisionItems) : undefined,
   }
   state.checkpoints.push(checkpoint)
   if (stage.implementationEvidence && merged.sliceId && state.deliveryPlan) {
@@ -568,6 +750,13 @@ async function validateSubmission(root: string, profile: WorkflowProfile, state:
   findings.push(...validateStageSemantics(state, stage, input))
   if (!options.partial && stage.implementationEvidence) findings.push(...await validateImplementationEvidence(state, input))
   const candidate = await candidateDocument(root, profile, stage.document, input.sections)
+  const candidateSections = documentSections(candidate)
+  const milestoneWriters = profile.stages.filter((item) => item.document === stage.document)
+  const closesHumanMilestone = Boolean(stage.humanGate && milestoneWriters.at(-1)?.id === stage.id)
+  if (!options.partial && closesHumanMilestone) {
+    findings.push(...validateHumanDecisionContract(state, stage, candidateSections, input.decisionItems))
+  }
+  if (!options.partial) findings.push(...validateExternalPartyEvidence(state, stage, candidateSections))
   if (!options.partial) findings.push(...await validateMandatoryCompatibilityConstraints(
     root, stage.scopeContract?.id, candidate,
   ))
@@ -713,6 +902,11 @@ function approvedSemanticContext(state: WorkflowState): string {
     ...(state.humanDecisions ?? []).flatMap((decision: any) => [
       String(decision?.feedback ?? ""),
       String(decision?.selectedCandidateId ?? ""),
+      String(decision?.candidateLabel ?? ""),
+      ...(Array.isArray(decision?.resolvedDecisions) ? decision.resolvedDecisions.map(String) : []),
+    ]),
+    ...(state.decisionLedger ?? []).filter((decision) => decision.status === "resolved").flatMap((decision) => [
+      decision.id, decision.question, decision.selectedOptionId ?? "", decision.selectedOptionLabel ?? "", ...decision.blocks,
     ]),
   ].join("\n")
 }
@@ -939,64 +1133,6 @@ export function validateStageSemantics(state: WorkflowState, stage: any, input: 
       "STRATEGIC_EVENT_NOT_STATE_CHANGE", "战略事件风暴", pseudoEvents,
       "查询、返回、展示或读取完成属于读模型结果，不是领域主体状态变化，不能列为过去时领域事件",
     )
-    if (requiresScenarioClarification(state.originalRequest ?? "")) {
-      const resolution = input.ambiguityResolution as any
-      const candidates = Array.isArray(resolution?.candidates) ? resolution.candidates : []
-      const ids = new Set(candidates.map((item: any) => String(item?.id ?? "").trim()).filter(Boolean))
-      const labelsComplete = candidates.every((item: any) => String(item?.label ?? "").trim())
-      const affected = Array.isArray(resolution?.affectedDecisions)
-        ? resolution.affectedDecisions.map((item: unknown) => String(item).trim()).filter(Boolean) : []
-      const affectedText = affected.join("、")
-      const decisionDimensions = [
-        /(?:触发|入口|参与者|发起)/u,
-        /(?:业务结果|结果|输出|查询|可见|返回|完成条件)/u,
-      ]
-      const missingDimensions = decisionDimensions.filter((pattern) => !pattern.test(affectedText)).length
-      if (resolution?.status !== "unresolved" || ids.size < 2 || ids.size > 3 || !labelsComplete || affected.length === 0 || affected.length > 4 || missingDimensions > 0) {
-        addFinding("AMBIGUOUS_SCENARIO_PREMATURE_COMMITMENT", "战略事件风暴", ["status=unresolved", "2 至 3 项有稳定 id/label 的候选", "1 至 4 项 affectedDecisions", "覆盖触发与用户可见结果"],
-          "原始请求只有能力名称，尚不足以唯一确定核心触发与用户可见结果；请只提交少量完整候选，避免把邻接需求扩张为本轮决策")
-      }
-      const confirmation = String(input.sections?.["本次请您确认"] ?? "")
-      const questionLabels = [...confirmation.matchAll(/(?:^|\n)\s*(?:\d+[.、]|[-*])?\s*(?:\*\*)?([^：:\n]{2,20})(?:\*\*)?\s*[：:]([^\n]*)/gu)]
-        .filter((match) => /[？?]|是否|需确认|待确认/u.test(`${match[1]}${match[2]}`))
-        .map((match) => match[1].replace(/^[#\s]+/gu, "").trim())
-        .filter((label) => !/(?:必须由人工决定|验收清单|未决问题|AI 推荐)/u.test(label))
-      const family = (value: string) => {
-        if (/(?:触发|入口|浏览|标记)/u.test(value)) return "trigger"
-        if (/(?:重复|去重|幂等)/u.test(value)) return "repeat"
-        if (/(?:保留|历史|周期|过期)/u.test(value)) return "retention"
-        if (/(?:未登录|登录|权限|身份)/u.test(value)) return "authorization"
-        if (/(?:结果|输出|查询|返回|可见)/u.test(value)) return "outcome"
-        if (/(?:撤销|补偿|误签到|误记录)/u.test(value)) return "compensation"
-        if (/(?:自然日|时区|日边界|时间边界)/u.test(value)) return "time-boundary"
-        if (/(?:不存在|无效对象|无效店铺|无效ID)/iu.test(value)) return "invalid-reference"
-        return value.replace(/行为|条件|规则|策略/gu, "")
-      }
-      const affectedFamilies = new Set(affected.map(family))
-      if (questionLabels.length > 4) addFinding("AMBIGUITY_SCOPE_OVEREXPANDED", "本次请您确认", questionLabels.slice(4),
-        "战略事件风暴只保留直接阻塞本轮业务语义的最多 4 个决策，其余邻接问题记录为未来候选而非本轮人工门禁")
-      const unregistered = [...new Set(questionLabels.filter((label) => !affectedFamilies.has(family(label))))]
-      if (unregistered.length) addFinding("AMBIGUITY_DECISION_UNREGISTERED", "本次请您确认", unregistered,
-        "人工待确认项必须全部登记在 ambiguityResolution.affectedDecisions 中，禁止提问却让该决策以默认规则进入主流程")
-      const nonAdvisory = entries.filter(([heading]) => !["本次请您确认", "备选解释与建议", "证据与追踪"].includes(heading))
-        .map(([, value]) => value).join("\n")
-      const committedRuleText = nonAdvisory.split(/\r?\n/u)
-        .filter((line) => !/(?:未来候选|后续候选|待战术事件风暴|尚未决定|规则待定)/u.test(line)).join("\n")
-      const unapprovedRuleFamilies = BUSINESS_RULE_FAMILIES
-        .filter((rule) => !affectedFamilies.has(rule.family) && rule.pattern.test(committedRuleText))
-      if (unapprovedRuleFamilies.length) addFinding("AMBIGUITY_RULE_PRECOMMITTED", "战略事件风暴",
-        unapprovedRuleFamilies.map((rule) => rule.label),
-        "模糊需求下不得顺手确定未获授权的异常、去重、时间或补偿规则；将其明确标为待战术事件风暴澄清，或作为高影响决策交给人工选择")
-      const unresolvedConflicts: string[] = []
-      if (questionLabels.some((label) => family(label) === "authorization")
-        && /(?:仅|只)(?:登录|已登录)用户|未登录[^。；\n]{0,20}(?:忽略|拒绝|记录)/u.test(nonAdvisory)) unresolvedConflicts.push("登录/权限规则")
-      if (questionLabels.some((label) => family(label) === "repeat")
-        && /(?:重复|同一店铺)[^。；\n]{0,30}(?:必须|仅|只)(?:保留|记录|去重)/u.test(nonAdvisory)) unresolvedConflicts.push("重复/去重规则")
-      if (questionLabels.some((label) => family(label) === "retention")
-        && /(?:轨迹|数据)[^。；\n]{0,30}(?:仅保留|永久保留|保留\d+)/u.test(nonAdvisory)) unresolvedConflicts.push("保留周期")
-      if (unresolvedConflicts.length) addFinding("AMBIGUITY_UNRESOLVED_DECISION_COMMITTED", "战略事件风暴", unresolvedConflicts,
-        "仍在等待人工确认的决策不能同时作为共享规则、唯一事件流或已确认约束出现")
-    }
   }
 
   if (stage.scopeContract?.id === "system-strategy") {
@@ -1206,42 +1342,73 @@ export async function review(input: ReviewInput): Promise<Transition & { reviewR
   if (checkpoint.status !== "awaiting_review") throw new WorkflowError(`阶段 ${input.stage} 不在待验收状态。`)
   const stage = stageContract(profile, input.stage)
   const document = await import("node:fs/promises").then(({ readFile }) => readFile(documentPath(root, profile, checkpoint.document), "utf8"))
-  const record = { decision: input.decision, reviewer: input.reviewer, reviewedAt: now(), feedback: input.feedback ?? "" }
+  let record = { decision: input.decision, reviewer: input.reviewer, reviewedAt: now(), feedback: input.feedback ?? "" }
   if (input.decision === "approve") {
     const missing = unfilledHeadings(document)
     if (missing.length) throw new WorkflowError(`正式里程碑文档仍有未完成章节，禁止人工批准：${missing.join("、")}。`)
     const allSections = documentSections(document)
     const owned = new Set(writableHeadingsForStage(stage))
-    const semanticBlockers = validateStageSemantics(state, stage, {
+    const semanticBlockers = [...validateStageSemantics(state, stage, {
       ...input,
       summary: checkpoint.summary,
       sections: Object.fromEntries(Object.entries(allSections).filter(([heading]) => owned.has(heading))),
       ambiguityResolution: checkpoint.ambiguityResolution,
-    }).filter((finding) => finding.severity === "blocking")
+    }), ...validateHumanDecisionContract(state, stage, allSections, checkpoint.decisionItems ?? []),
+    ...validateExternalPartyEvidence(state, stage, allSections)]
+      .filter((finding) => finding.severity === "blocking")
     if (semanticBlockers.length) throw new WorkflowError(
       `正式里程碑文档未通过阶段语义复核，禁止人工批准：${semanticBlockers.map((finding) => finding.message).join("；")}`,
     )
     if (checkpoint.document === "milestoneIV") await writeApprovedModelContract(root, String(document))
-    const ambiguity = checkpoint.ambiguityResolution as any
-    if (ambiguity?.status === "unresolved" && Array.isArray(ambiguity.candidates) && ambiguity.candidates.length) {
-      const feedback = input.feedback ?? ""
-      const selected = ambiguity.candidates.find((candidate: any) => candidate.id === input.resolution?.selectedCandidateId)
-        ?? ambiguity.candidates.find((candidate: any) => feedback.includes(String(candidate.id)) || feedback.includes(String(candidate.label)))
-      if (!selected) throw new WorkflowError(
-        `本里程碑存在未决候选，批准时必须提供 resolution.selectedCandidateId；可选：${ambiguity.candidates.map((candidate: any) => `${candidate.id}（${candidate.label}）`).join("、")}`,
-      )
-      checkpoint.ambiguityResolution = {
-        ...ambiguity, status: "resolved", selectedCandidateId: selected.id,
+    const decisionItems = checkpoint.decisionItems ?? []
+    const openItems = decisionItems.filter((item) => item.status === "open")
+    const selections = input.resolution?.selections ?? {}
+    const resolvedItems: DecisionItem[] = []
+    const missingSelections: string[] = []
+    for (const item of openItems) {
+      const requested = selections[item.id]
+        ?? (openItems.length === 1 ? input.resolution?.selectedCandidateId : undefined)
+      const selected = item.options.find((option) => option.id === requested)
+        ?? item.options.find((option) => record.feedback.includes(option.id) || record.feedback.includes(option.label))
+        ?? item.options.find((option) => option.id === item.recommendationId)
+      if (!selected) {
+        missingSelections.push(`${item.id}（${item.options.map((option) => option.id).join("/")}）`)
+        continue
+      }
+      resolvedItems.push({
+        ...item, status: "resolved", selectedOptionId: selected.id, selectedOptionLabel: selected.label,
+        resolvedAt: now(), resolvedBy: input.reviewer,
+      })
+    }
+    if (missingSelections.length) throw new WorkflowError(
+      `这些决策没有唯一推荐项，批准时必须提供 resolution.selections：${missingSelections.join("、")}。`,
+    )
+    if (resolvedItems.length || decisionItems.some((item) => item.status !== "open")) {
+      const unchanged = decisionItems.filter((item) => item.status !== "open")
+      checkpoint.decisionItems = [...resolvedItems, ...unchanged]
+      state.decisionLedger ??= []
+      const replaced = new Set(checkpoint.decisionItems.map((item) => item.id))
+      state.decisionLedger = [...state.decisionLedger.filter((item) => !replaced.has(item.id)), ...checkpoint.decisionItems]
+      const decisionFeedback = resolvedItems.length
+        ? `批准并接受：${resolvedItems.map((item) => `${item.id}=${item.selectedOptionId}（${item.selectedOptionLabel}）`).join("；")}`
+        : "批准当前里程碑；没有待选择的业务决策。"
+      if (!record.feedback.trim()) record = { ...record, feedback: decisionFeedback }
+      state.humanDecisions ??= []
+      for (const item of resolvedItems) state.humanDecisions.push({
+        milestone: checkpoint.milestone, stage: checkpoint.stage, selectedCandidateId: item.selectedOptionId,
+        candidateLabel: item.selectedOptionLabel,
+        resolvedDecisions: [item.question, ...item.blocks],
+        deferredToTacticalFamilies: deferredRuleFamilies(document),
+        feedback: decisionFeedback,
+        reviewer: input.reviewer, decidedAt: now(),
+      })
+      const ambiguity = checkpoint.ambiguityResolution as any
+      if (ambiguity?.status === "unresolved" && resolvedItems.length === 1) checkpoint.ambiguityResolution = {
+        ...ambiguity, status: "resolved", selectedCandidateId: resolvedItems[0].selectedOptionId,
+        selectedCandidateLabel: resolvedItems[0].selectedOptionLabel,
         resolvedDecisions: input.resolution?.resolvedDecisions ?? ambiguity.affectedDecisions ?? [],
         resolvedAt: now(), resolvedBy: input.reviewer,
       }
-      state.humanDecisions ??= []
-      state.humanDecisions.push({
-        milestone: checkpoint.milestone, stage: checkpoint.stage, selectedCandidateId: selected.id,
-        resolvedDecisions: input.resolution?.resolvedDecisions ?? ambiguity.affectedDecisions ?? [],
-        deferredToTacticalFamilies: deferredRuleFamilies(document),
-        reviewer: input.reviewer, decidedAt: now(),
-      })
     }
   }
   checkpoint.review = record

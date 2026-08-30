@@ -1,5 +1,5 @@
 import { workflowTransition } from "./transition.js";
-import type { Identity, WorkflowState, Transition, ReviewDecision, OpenSpecArtifact, ValidationFinding, HumanDecisionResolution } from "./types.js";
+import type { Identity, WorkflowState, Transition, ReviewDecision, OpenSpecArtifact, ValidationFinding, HumanDecisionResolution, DecisionItem } from "./types.js";
 export interface InitInput extends Identity {
     title: string;
     request: string;
@@ -13,6 +13,7 @@ export interface SubmitInput extends Identity {
     sections: Record<string, string>;
     claims?: unknown;
     ambiguityResolution?: unknown;
+    decisionItems?: unknown;
     plannedSlices?: number;
     sliceId?: string;
     finalize?: boolean;
@@ -44,6 +45,9 @@ export interface OpenSpecInput extends Identity {
     skipSpecs?: boolean;
 }
 export declare function requiresScenarioClarification(request: string): boolean;
+export declare function renderDecisionReviewSection(items: DecisionItem[]): string;
+export declare function validateHumanDecisionContract(state: WorkflowState, stage: any, sections: Record<string, string>, decisionItems: unknown): ValidationFinding[];
+export declare function validateExternalPartyEvidence(state: WorkflowState, stage: any, sections: Record<string, string>): ValidationFinding[];
 export declare function initialize(input: InitInput): Promise<Transition & {
     workflowId: string;
 }>;

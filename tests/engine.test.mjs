@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { initialize, prepare, submit, review, status, block, archive, hasFailedVerificationEvidence, containsRequiredConcept, extractApprovedModelContract, queryPseudoEvents, requiresScenarioClarification, validateMandatoryCompatibilityConstraints, validateStageSemantics } from "../dist/engine.js"
+import { initialize, prepare, submit, review, status, block, archive, hasFailedVerificationEvidence, containsRequiredConcept, extractApprovedModelContract, queryPseudoEvents, requiresScenarioClarification, validateExternalPartyEvidence, validateHumanDecisionContract, validateMandatoryCompatibilityConstraints, validateStageSemantics } from "../dist/engine.js"
 import { DddWorkflowPlugin, dddLifecycleTool, lifecycleFinalizeMetadata, normalizeReviewDecision } from "../dist/index.js"
 import { renderSections, unfilledHeadings } from "../dist/documents.js"
 import { newChange, openSpecAction, planningArtifacts, runOpenSpec, verifyArchive } from "../dist/openspec.js"
@@ -573,6 +573,7 @@ async function completeMilestoneI(dir, workflowId) {
       status: "unresolved",
       candidates: [{ id: "candidate-a", label: "参与者主动发起" }, { id: "candidate-b", label: "外部事实触发" }],
       affectedDecisions: ["触发条件", "业务结果", "异常与规则"],
+      recommendedCandidateId: "candidate-a",
     } } : {}),
   })
 }
@@ -922,124 +923,75 @@ test("strategic event storm blocks technical design leakage", async () => {
   }
 })
 
-test("capability-only requests require human choice between candidate event flows", () => {
+test("scenario clarification remains a stage-card hint while the decision ledger gates every request shape", () => {
   assert.equal(requiresScenarioClarification("新增用户一日光顾店铺轨迹功能"), true)
   assert.equal(requiresScenarioClarification("在当前项目新增用户一日光顾店铺轨迹功能"), true)
   assert.equal(requiresScenarioClarification("新增用户轨迹查询功能"), true)
   assert.equal(requiresScenarioClarification("当用户成功查看店铺详情后记录一次访问，并支持查询当天记录"), false)
-  const state = { originalRequest: "新增用户一日光顾店铺轨迹功能" }
-  const stage = { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } }
-  const premature = validateStageSemantics(state, stage, {
-    stage: stage.id,
-    summary: "选择查看店铺详情作为唯一触发路径。",
-    sections: {
-      "一页结论": "用户查看店铺详情后自动记录光顾。",
-      "战略事件风暴": "用户 → 查看店铺详情 → 光顾已记录。",
-    },
-  })
-  assert.ok(premature.some((finding) => finding.code === "AMBIGUOUS_SCENARIO_PREMATURE_COMMITMENT"))
-
-  const candidates = validateStageSemantics(state, stage, {
-    stage: stage.id,
-    summary: "并列呈现两套待选择的业务解释。",
-    sections: {
-      "一页结论": "触发与结果尚待人工确认。",
-      "战略事件风暴": "候选场景 A：用户实际到店 → 光顾已发生。\n候选场景 B：用户查看详情 → 浏览已发生。\n人工确认前，候选均不进入本次目标或主流程。",
-    },
-    ambiguityResolution: {
-      status: "unresolved",
-      candidates: [{ id: "physical", label: "实际到店" }, { id: "browse", label: "页面浏览" }],
-      affectedDecisions: ["光顾触发条件", "用户可见的业务结果", "重复行为与异常规则"],
-    },
-  })
-  assert.ok(!candidates.some((finding) => finding.code === "AMBIGUOUS_SCENARIO_PREMATURE_COMMITMENT"))
 })
 
-test("ambiguous discovery registers every human question and cannot pre-commit its answer", () => {
-  const findings = validateStageSemantics(
-    { originalRequest: "新增用户一日光顾店铺轨迹功能" },
-    { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } },
-    {
-      stage: "02-big-picture-event-storm", summary: "候选仍待人工决定。",
-      sections: {
-        "本次请您确认": "1. **触发条件**：浏览还是主动标记？\n2. **未登录行为**：记录还是忽略？\n3. **轨迹保留**：仅当日还是历史？",
-        "战略事件风暴": "候选A与候选B并列。登录校验规则：仅登录用户被记录，未登录用户忽略。",
-      },
-      ambiguityResolution: {
-        status: "unresolved",
-        candidates: [{ id: "a", label: "浏览触发并返回轨迹" }, { id: "b", label: "主动标记并返回轨迹" }],
-        affectedDecisions: ["触发条件", "业务结果", "异常与重复规则"],
-      },
-    },
-  )
+test("every human milestone registers a written choice even when the original request looked structured", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const sections = {
+    "本次请您确认": "1. 收藏时间语义：以首次收藏时刻为准，还是每次动作都刷新？\n2. 查询按倒序是否满足预期？",
+    "战略事件风暴": "用户收藏店铺后形成收藏事实。收藏时间以动作发生时刻为准。",
+  }
+  const findings = validateHumanDecisionContract({ originalRequest: "新增用户收藏店铺并按收藏时间查询功能" }, stage, sections)
   const codes = new Set(findings.map((finding) => finding.code))
-  assert.ok(codes.has("AMBIGUITY_DECISION_UNREGISTERED"))
-  assert.ok(codes.has("AMBIGUITY_UNRESOLVED_DECISION_COMMITTED"))
+  assert.ok(codes.has("DECISION_ITEMS_REQUIRED"))
 })
 
-test("ambiguous discovery bounds the human decision set instead of expanding adjacent requirements", () => {
-  const findings = validateStageSemantics(
-    { originalRequest: "新增用户一日光顾店铺轨迹功能" },
-    { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } },
-    {
-      stage: "02-big-picture-event-storm", summary: "候选仍待人工决定。",
-      sections: {
-        "本次请您确认": "1. 触发条件：浏览还是标记？\n2. 业务结果：追加还是覆盖？\n3. 匿名访问：是否支持？\n4. 历史保留：保存多久？\n5. 跨时区：按哪个时区？",
-        "战略事件风暴": "候选 A 与候选 B 并列，人工批准前不进入唯一主流程。",
-      },
-      ambiguityResolution: {
-        status: "unresolved",
-        candidates: [{ id: "a", label: "浏览触发并返回轨迹" }, { id: "b", label: "主动标记并返回轨迹" }],
-        affectedDecisions: ["触发条件", "业务结果", "匿名访问规则", "历史保留规则", "跨时区规则"],
-      },
-    },
-  )
-  const codes = new Set(findings.map((finding) => finding.code))
-  assert.ok(codes.has("AMBIGUOUS_SCENARIO_PREMATURE_COMMITMENT"))
-  assert.ok(codes.has("AMBIGUITY_SCOPE_OVEREXPANDED"))
+test("a structured recommended candidate remains non-authoritative until human review", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const sections = {
+    "本次请您确认": "收藏时间采用首次时间，还是每次动作刷新？推荐 TIME-FIRST。",
+    "战略事件风暴": "候选 TIME-FIRST 与 TIME-REFRESH 并列；DEC-TIME blocks 收藏时间规则，人工批准前不进入唯一主流程。",
+    "备选解释与建议": "推荐 TIME-FIRST，因为重复意图不会改变既有收藏事实。",
+  }
+  const findings = validateHumanDecisionContract({ originalRequest: "新增收藏店铺并按收藏时间查询" }, stage, sections, [{
+    id: "DEC-FAVORITE-TIME", question: "收藏时间采用首次时间还是每次动作刷新？",
+    options: [{ id: "TIME-FIRST", label: "保留首次收藏时间" }, { id: "TIME-REFRESH", label: "每次动作刷新时间" }],
+    recommendationId: "TIME-FIRST", status: "open", blocks: ["RULE-FAVORITE-TIME"],
+    sourceRefs: ["user-input:original-request"],
+  }])
+  assert.equal(findings.filter((finding) => finding.severity === "blocking").length, 0)
 })
 
-test("candidate description labels are not misclassified as additional human decisions", () => {
-  const findings = validateStageSemantics(
-    { originalRequest: "在当前项目新增用户一日光顾店铺轨迹功能" },
-    { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } },
-    {
-      stage: "02-big-picture-event-storm", summary: "并列展示两套完整候选。",
-      sections: {
-        "本次请您确认": "### 光顾触发方式待确认\n候选 checkin：主动签到并返回轨迹列表\n候选 auto：自动判定并返回轨迹列表",
-        "战略事件风暴": "两套候选事件流并列，人工批准前不进入唯一主流程。",
-      },
-      ambiguityResolution: {
-        status: "unresolved",
-        candidates: [{ id: "checkin", label: "主动签到并返回轨迹" }, { id: "auto", label: "自动判定并返回轨迹" }],
-        affectedDecisions: ["触发方式：主动签到或自动判定", "用户可见结果：确认提示与轨迹列表"],
-      },
-    },
-  )
-  assert.ok(!findings.some((finding) => finding.code === "AMBIGUITY_DECISION_UNREGISTERED"))
+test("a downstream milestone cannot reopen an already resolved decision id", () => {
+  const stage = { id: "04-service-use-cases", humanGate: true, scopeContract: { id: "system-strategy" } }
+  const state = {
+    originalRequest: "新增收藏店铺并按收藏时间查询",
+    decisionLedger: [{ id: "DEC-FAVORITE-TIME", ownerStage: "02-big-picture-event-storm", question: "收藏时间语义",
+      options: [{ id: "TIME-FIRST", label: "首次时间" }, { id: "TIME-REFRESH", label: "刷新时间" }],
+      recommendationId: "TIME-FIRST", status: "resolved", blocks: ["RULE-FAVORITE-TIME"],
+      sourceRefs: ["user-input:original-request"], selectedOptionId: "TIME-FIRST", selectedOptionLabel: "首次时间" }],
+  }
+  const findings = validateHumanDecisionContract(state, stage, {
+    "本次请您确认": "运行时生成。",
+    "实现单元用例包": "该规则仍由 DEC-FAVORITE-TIME blocks，未进入用例验收。",
+  }, [{
+    id: "DEC-FAVORITE-TIME", question: "是否改变收藏时间语义？",
+    options: [{ id: "TIME-FIRST", label: "首次时间" }, { id: "TIME-REFRESH", label: "刷新时间" }],
+    recommendationId: "TIME-FIRST", status: "open", blocks: ["RULE-FAVORITE-TIME"],
+    sourceRefs: ["decision:DEC-FAVORITE-TIME"],
+  }])
+  assert.ok(findings.some((finding) => finding.code === "DECISION_ALREADY_RESOLVED"))
 })
 
-test("ambiguous discovery rejects unapproved exception and compensation rules in the main flow", () => {
-  const findings = validateStageSemantics(
-    { originalRequest: "在当前项目新增用户一日光顾店铺轨迹功能" },
-    { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } },
-    {
-      stage: "02-big-picture-event-storm", summary: "并列展示触发候选。",
-      sections: {
-        "本次请您确认": "候选 checkin：主动签到并返回轨迹\n候选 auto：自动判定并返回轨迹",
-        "战略事件风暴": "两套候选事件流并列。",
-        "异常、补偿与时间约束": "未登录用户一律拒绝；同日同店重复签到幂等返回；误签到可申请撤销；自然日按用户时区 00:00 划分。",
-      },
-      ambiguityResolution: {
-        status: "unresolved",
-        candidates: [{ id: "checkin", label: "主动签到并返回轨迹" }, { id: "auto", label: "自动判定并返回轨迹" }],
-        affectedDecisions: ["触发方式：主动签到或自动判定", "用户可见结果：确认提示与轨迹列表"],
-      },
-    },
-  )
-  const precommit = findings.find((finding) => finding.code === "AMBIGUITY_RULE_PRECOMMITTED")
-  assert.ok(precommit)
-  assert.match(precommit.message, /权限|重复|撤销|自然日/u)
+test("an interface header cannot be promoted to an external system without boundary evidence", () => {
+  const stage = { id: "04-service-use-cases", humanGate: true, scopeContract: { id: "system-strategy" } }
+  const state = { originalRequest: "新增收藏店铺并按收藏时间查询" }
+  const sections = {
+    "一页结论": "身份由外部身份头提供。",
+    "上下文映射": "身份提供方（外部上游）到店铺商城采用 Conformist。",
+    "证据与追踪": "现状代码通过 x-user-id 请求头解析用户身份。",
+  }
+  assert.ok(validateExternalPartyEvidence(state, stage, sections)
+    .some((finding) => finding.code === "STRATEGIC_EXTERNAL_PARTY_WITHOUT_BOUNDARY_EVIDENCE"))
+  assert.equal(validateExternalPartyEvidence(state, stage, {
+    ...sections,
+    "证据与追踪": "boundaryEvidence: runtime:identity-service-call 表明身份来自独立部署的身份服务。",
+  }).length, 0)
 })
 
 test("strategic use-case packaging cannot promote rules deferred to tactical event storm", () => {
@@ -1932,6 +1884,24 @@ test("human gate: submit then review approve advances", async () => {
     const approved = await status({ workflowType: "add-feature", workflowId: "g1", projectRoot: dir, view: "full" })
     assert.equal(approved.state.checkpoints.at(-1).ambiguityResolution.status, "resolved")
     assert.equal(approved.state.humanDecisions[0].selectedCandidateId, "candidate-a")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("plain approval accepts only the unique documented recommendation and records its semantics", async () => {
+  const dir = await freshProject()
+  try {
+    await initialize({ workflowType: "add-feature", workflowId: "recommended-approval", projectRoot: dir, title: "t", request: "r" })
+    await completeMilestoneI(dir, "recommended-approval")
+    const approved = await review({
+      workflowType: "add-feature", workflowId: "recommended-approval", projectRoot: dir,
+      stage: "02-big-picture-event-storm", decision: "approve", reviewer: "tester",
+    })
+    assert.match(approved.reviewRecord.feedback, /candidate-a|参与者主动发起/u)
+    const state = (await status({ workflowType: "add-feature", workflowId: "recommended-approval", projectRoot: dir, view: "full" })).state
+    assert.equal(state.humanDecisions[0].selectedCandidateId, "candidate-a")
+    assert.equal(state.humanDecisions[0].candidateLabel, "参与者主动发起")
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

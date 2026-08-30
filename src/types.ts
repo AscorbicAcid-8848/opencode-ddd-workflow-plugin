@@ -6,6 +6,29 @@ export type LifecycleAction = "init" | "prepare" | "evidence-bundle" | "complete
 export interface HumanDecisionResolution {
   selectedCandidateId?: string
   resolvedDecisions?: string[]
+  selections?: Record<string, string>
+}
+
+export interface DecisionOption {
+  id: string
+  label: string
+  impact?: string
+}
+
+export interface DecisionItem {
+  id: string
+  ownerStage: string
+  question: string
+  options: DecisionOption[]
+  recommendationId?: string
+  status: "open" | "resolved" | "deferred" | "out-of-scope"
+  blocks: string[]
+  sourceRefs: string[]
+  selectedOptionId?: string
+  selectedOptionLabel?: string
+  resolvedAt?: string
+  resolvedBy?: string
+  deferredToStage?: string
 }
 
 export interface DeliveryPlanState {
@@ -83,6 +106,7 @@ export interface Checkpoint {
   completedSlices?: number
   sliceId?: string
   ambiguityResolution?: unknown
+  decisionItems?: DecisionItem[]
   humanReviewSummary?: string
 }
 
@@ -108,12 +132,15 @@ export interface WorkflowState {
   runtimeBlock?: { stage: string; reason: string; evidence: string[]; remediation: string[]; blockedAt: string }
   implementationBaseline?: { head: string; capturedAt: string }
   deliveryPlan?: DeliveryPlanState
+  decisionLedger?: DecisionItem[]
   humanDecisions?: Array<{
     milestone: string
     stage: string
     selectedCandidateId?: string
+    candidateLabel?: string
     resolvedDecisions: string[]
     deferredToTacticalFamilies?: string[]
+    feedback?: string
     reviewer: string
     decidedAt: string
   }>

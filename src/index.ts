@@ -417,6 +417,7 @@ const lifecycleTool = tool({
           claims: observations.map((item: any) => claimFromObservation(stage, String(item?.heading ?? ""), item)),
           replaceClaims: Array.isArray(i.observations),
           ambiguityResolution: i.ambiguityResolution,
+          decisionItems: i.decisionItems,
           finalize: true, ...metadata }))
       }
       if (args.action === "review") {
@@ -741,7 +742,7 @@ export const DddWorkflowPlugin: Plugin = async (pluginInput, pluginOptions) => {
         description: "Run the deterministic DDD/OpenSpec lifecycle with a reduced tool surface.",
         mode: "primary",
         maxSteps: 30,
-        prompt: "DDD scheduler mode: use tools without progress narration. Existing-system baseline is prepare, one evidence-bundle, then one complete-stage; repository and shell exploration are unnecessary. Other stages are prepare then one complete-stage. At milestone V send one structured plan to openspec-plan, then complete-stage with empty input; never hand-write OpenSpec or milestone-V Markdown. Human approval of unresolved candidates must include resolution.selectedCandidateId. Stop only at a human gate or real block.",
+        prompt: "DDD scheduler mode: use tools without progress narration. Existing-system baseline is prepare, one evidence-bundle, then one complete-stage; repository and shell exploration are unnecessary. Other stages are prepare then one complete-stage. At milestone V send one structured plan to openspec-plan, then complete-stage with empty input; never hand-write OpenSpec or milestone-V Markdown. At every DDD modeling human milestone submit decisionItems (empty when no open choice); the runtime, not the model, owns 本次请您确认. Open questions in body must cite their decision id. A plain human approval accepts each unique recommendation; otherwise review must submit resolution.selections. Stop only at a human gate or real block.",
         tools: { ...(config.agent[DDD_AGENT_ID]?.tools ?? {}), ...modelingOnlyTools },
       }
       config.agent[DDD_CODE_AGENT_ID] = {
