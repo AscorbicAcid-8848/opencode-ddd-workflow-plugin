@@ -5,6 +5,12 @@ import { exists } from "./fs.js";
 const sourceRoots = ["src", "app", "apps", "packages", "services"];
 const extensions = new Set([".java", ".kt", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".cs", ".xml", ".yaml", ".yml", ".properties"]);
 const ignored = new Set([".git", "node_modules", "target", "build", "dist", ".idea", ".gradle"]);
+const conventionFiles = [
+    "README.md", "README.MD", "readme.md", "package.json", "pom.xml",
+    "build.gradle", "build.gradle.kts", "settings.gradle", "pyproject.toml", "go.mod",
+];
+const conventionPattern = /(?:必须|不得|禁止|应当|需要保持|现有行为|兼容|持久化|存储|身份|认证|测试|\bmust\b|\bmust not\b|\brequired\b|\bshall\b|compatib|persist|storage|auth|test)/iu;
+const mandatoryPattern = /(?:必须|不得|禁止|应当|需要保持|现有行为[^。\n]{0,20}保持|\bmust\b|\bmust not\b|\brequired\b|\bshall\b)/iu;
 async function walk(root, relative, output, limit) {
     if (output.length >= limit)
         return;
@@ -25,6 +31,32 @@ async function names(root) {
     if (!await exists(root))
         return [];
     return (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+}
+async function projectConventionEvidence(root) {
+    const result = [];
+    const seen = new Set();
+    for (const candidate of conventionFiles) {
+        const file = candidate.replace(/\\/gu, "/");
+        if (seen.has(file.toLocaleLowerCase()))
+            continue;
+        const absolute = path.join(root, candidate);
+        if (!await exists(absolute) || (await stat(absolute)).size > 160_000)
+            continue;
+        seen.add(file.toLocaleLowerCase());
+        const lines = (await readFile(absolute, "utf8").catch(() => "")).split(/\r?\n/u);
+        const selected = lines.map((text, index) => ({ text: text.trim(), index }))
+            .filter(({ text }) => text && conventionPattern.test(text)).slice(0, 10);
+        const fallback = selected.length ? selected : lines.map((text, index) => ({ text: text.trim(), index }))
+            .filter(({ text }) => text).slice(0, 4);
+        if (!fallback.length)
+            continue;
+        result.push({ file, excerpts: fallback.map(({ text, index }) => ({
+                ref: `code:${file}#L${index + 1}-L${index + 1}`,
+                text: `L${index + 1}: ${text}`,
+                mandatory: mandatoryPattern.test(text),
+            })) });
+    }
+    return result;
 }
 export async function evidenceBundle(projectRoot, workflowId, rawTerms) {
     const terms = (Array.isArray(rawTerms) ? rawTerms : []).map(String).map((term) => term.trim()).filter(Boolean).slice(0, 6);
@@ -89,11 +121,16 @@ export async function evidenceBundle(projectRoot, workflowId, rawTerms) {
     const topLevel = (await readdir(projectRoot, { withFileTypes: true })).map((entry) => entry.name).filter((name) => !ignored.has(name)).sort();
     const currentSpecs = await names(path.join(projectRoot, "openspec", "specs"));
     const priorChanges = (await names(path.join(projectRoot, "openspec", "changes"))).filter((name) => name !== "archive" && name !== workflowId);
+    const conventions = await projectConventionEvidence(projectRoot);
+    const mandatoryCompatibilityConstraints = conventions.flatMap(({ excerpts }) => excerpts)
+        .filter(({ mandatory }) => mandatory).map(({ mandatory: _mandatory, ...item }) => item);
     const absentTerms = lowered.filter((term) => !seenTerms.has(term));
     const negativeSearchRef = `search:evidence-bundle:${createHash("sha256").update(`${workflowId}\0${files.length}\0${lowered.join("|")}`).digest("hex").slice(0, 12)}`;
     const bundle = {
         schemaVersion: "ddd-evidence-bundle/v1", terms, expandedSearchTerms: searchTerms, repositoryShape: topLevel, sourceFileCount: files.length,
         matches: matches.slice(0, 8).map(({ file, excerpts }) => ({ file, excerpts })),
+        projectConventionEvidence: conventions,
+        mandatoryCompatibilityConstraints,
         openSpecIndex: { currentSpecs, priorChanges, citation: "search:openspec/specs-and-prior-changes" },
         negativeSearchEvidence: absentTerms.length ? {
             ref: negativeSearchRef,
@@ -101,8 +138,8 @@ export async function evidenceBundle(projectRoot, workflowId, rawTerms) {
             scope: sourceRoots,
             rule: "该引用只证明 absentTerms 中的精确代码词在本次完整源码文件扫描中未命中；不得据此声称整个业务能力、模块或其他实体不存在。",
         } : null,
-        citationRule: "事实的 evidence_refs 必须逐字复制 excerpt.ref（code:相对路径#Lx-Ly）；不得只写裸路径。未出现的行为只写为 evidence-gap/open-question，不得在缺口中决定新增表、模型、接口或实现；不再扩大搜索。",
-        requiredCoverage: ["事实、假设与待确认项", "可执行验收约束", "现状代码证据索引", "验证基线", "OpenSpec历史战略基线"],
+        citationRule: "事实的 evidence_refs 必须逐字复制 excerpt.ref（code:相对路径#Lx-Ly）；不得只写裸路径。mandatoryCompatibilityConstraints 必须逐项写为兼容性约束，后续设计不得降级为实施前可选核验。未出现的行为只写为 evidence-gap/open-question，不得在缺口中决定新增表、模型、接口或实现；不再扩大搜索。",
+        requiredCoverage: ["事实、假设与待确认项", "工程约束与兼容性", "可执行验收约束", "现状代码证据索引", "验证基线", "OpenSpec历史战略基线"],
         responseBudget: { totalSectionChars: "900-1600", observations: "4-6" },
         nextAction: "依据本 bundle 直接调用 complete-stage；不要逐文件补读、不要先输出草稿或推理。",
     };
@@ -111,7 +148,11 @@ export async function evidenceBundle(projectRoot, workflowId, rawTerms) {
     // keeping the stage card much smaller than replaying the complete evidence stage.
     const snapshot = {
         repositoryShape: topLevel,
-        codeEvidence: matches.slice(0, 4).flatMap(({ excerpts }) => excerpts.slice(0, 1)).map(({ ref, text }) => ({ ref, text })),
+        codeEvidence: [
+            ...mandatoryCompatibilityConstraints,
+            ...matches.slice(0, 4).flatMap(({ excerpts }) => excerpts.slice(0, 1)).map(({ ref, text }) => ({ ref, text })),
+        ].slice(0, 8),
+        mandatoryCompatibilityConstraints,
         openSpecIndex: bundle.openSpecIndex,
         authorizedSearchEvidence: absentTerms.length ? [{ ref: negativeSearchRef, absentTerms }] : [],
     };

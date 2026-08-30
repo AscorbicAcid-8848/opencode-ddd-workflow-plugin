@@ -568,6 +568,9 @@ async function validateSubmission(root: string, profile: WorkflowProfile, state:
   findings.push(...validateStageSemantics(state, stage, input))
   if (!options.partial && stage.implementationEvidence) findings.push(...await validateImplementationEvidence(state, input))
   const candidate = await candidateDocument(root, profile, stage.document, input.sections)
+  if (!options.partial) findings.push(...await validateMandatoryCompatibilityConstraints(
+    root, stage.scopeContract?.id, candidate,
+  ))
   const required = stage.qualityContract?.requiredContent as string[] | undefined
   if (!options.partial && required) {
     for (const concept of required) {
@@ -589,6 +592,39 @@ async function validateSubmission(root: string, profile: WorkflowProfile, state:
       findings.push({ code: "MILESTONE_DOCUMENT_INCOMPLETE", path: "sections", severity: "blocking",
         message: `人工里程碑文档仍有未完成章节：${missing.join("、")}。请在本次 submit 一并补齐，禁止把占位内容提交给用户验收。` })
     }
+  }
+  return findings
+}
+
+export async function validateMandatoryCompatibilityConstraints(
+  root: string,
+  scopeId: string | undefined,
+  candidate: string,
+): Promise<ValidationFinding[]> {
+  if (!new Set(["context-tactical-design", "delivery-planning", "implementation"]).has(scopeId ?? "")) return []
+  const file = path.join(root, ".ddd", "workbench", "evidence-snapshot.json")
+  if (!await exists(file)) return []
+  const snapshot = await readJson<Record<string, any>>(file)
+  const constraints = Array.isArray(snapshot.mandatoryCompatibilityConstraints)
+    ? snapshot.mandatoryCompatibilityConstraints : []
+  const findings: ValidationFinding[] = []
+  for (const constraint of constraints) {
+    const ref = String(constraint?.ref ?? "").trim()
+    const text = String(constraint?.text ?? "").replace(/^L\d+:\s*/u, "").trim()
+    if (!text) continue
+    const identifiers = [...new Set(text.match(/\b[A-Z][A-Za-z0-9_]{3,}\b/gu) ?? [])]
+    const semanticAnchors = [...new Set(text.match(/持久化|存储|身份|认证|兼容|测试|事务|排序|文件|数据库/gu) ?? [])]
+    const identifiersCovered = identifiers.length > 0 && identifiers.every((token) => candidate.includes(token))
+    const semanticCovered = identifiers.length === 0 && semanticAnchors.length > 0
+      && semanticAnchors.slice(0, 2).every((token) => candidate.includes(token))
+    if (ref && candidate.includes(ref) || identifiersCovered || semanticCovered) continue
+    findings.push({
+      code: "MANDATORY_COMPATIBILITY_CONSTRAINT_UNTRACED",
+      path: "sections",
+      severity: "blocking",
+      message: `现状证据中的强制工程约束尚未进入当前设计：${text}`,
+      suggestion: `在当前阶段明确落实 ${ref || text}；不得降级为 Coding 前的可选核验项。`,
+    })
   }
   return findings
 }
@@ -785,14 +821,18 @@ export function extractApprovedModelContract(document: string) {
     const clause = rawTail.split(/[；;。|\n]/u, 1)[0].replace(/^\s*[`*]{1,2}\s*/u, "").trim()
     if (!clause || /^[\/、,，→]/u.test(clause)) continue
     const quoted = clause.match(/^\s*(?:[：:]\s*)?[`*]{1,2}([^`*]{2,80})[`*]{1,2}/u)?.[1]
-    const typedSuffix = clause.match(new RegExp(`^\\s*(?:[：:]\\s*)?[\`*]{0,2}([\\p{L}_][\\p{L}\\p{N}_.\\- ]{1,79}?)[\`*]{0,2}\\s*(?:${kinds})(?=[：:\\s，,]|$)`, "u"))?.[1]
+    const canonicalInParentheses = clause.match(/^\s*(?:[：:]\s*)?[^（）()\n]{1,80}[（(]([A-Za-z][A-Za-z0-9_.\-]{1,79})[）)](?=[：:\s，,]|$)/u)?.[1]
+    const typedSuffix = clause.match(new RegExp(`^\\s*(?:[：:]\\s*)?[\`*]{0,2}([\\p{L}_][\\p{L}\\p{N}_.\\- ]{1,79}?)[\`*]{0,2}\\s*(?:${kinds})(?=[：:\\s，,（(]|$)`, "u"))?.[1]
     const typedPrefix = clause.match(new RegExp(`^\\s*(?:[：:]\\s*)?(?:${kinds})\\s*[\`*]{0,2}([\\p{L}_][\\p{L}\\p{N}_.\\- ]{1,79})[\`*]{0,2}(?=[：:\\s，,]|$)`, "u"))?.[1]
+    const typedOnlyClause = clause.replace(/^\s*(?:[：:]\s*)?/u, "")
+    const typedOnly = kinds.split("|").find((kind) => typedOnlyClause.startsWith(kind)
+      && /^(?:[：:\s、，,（(]|$)/u.test(typedOnlyClause.slice(kind.length)))
     const colonName = clause.match(/^\s*[：:]\s*[`*]{0,2}([\p{L}_][\p{L}\p{N}_.\-]{1,79})[`*]{0,2}(?=[：:\s，,({]|$)/u)?.[1]
     const asciiName = clause.match(/^\s*(?:[：:]\s*)?[`*]{0,2}([A-Za-z][A-Za-z0-9_.\-]{1,79})[`*]{0,2}(?=[：:\s，,({]|$)/u)?.[1]
-    const name = String(quoted ?? typedSuffix ?? typedPrefix ?? colonName ?? asciiName ?? "").trim()
+    const name = String(quoted ?? canonicalInParentheses ?? typedSuffix ?? typedPrefix ?? typedOnly ?? colonName ?? asciiName ?? "").trim()
     if (name && !/^(?:的|由|与|和|及|在|位于|用于|依赖|保护|覆盖|对应)/u.test(name)) modelElements.push({ id, name })
   }
-  invariantMatches.push(...[...text.matchAll(/\b(INV-\d+)\b[`*]{0,2}(?:\s*[：:]\s*|\s+)([^|\n。；]{3,180})/gu)]
+  invariantMatches.push(...[...text.matchAll(/\b(INV-\d+)\b[`*]{0,2}(?:\s*[：:]\s*|\s+)([^|\n。；]{3,180}?)(?=(?:[、,，]\s*)?[`*]{0,2}INV-\d+\b|[。；\n]|$)/gu)]
     .map((match) => ({ id: match[1], statement: match[2].replace(/[`*_]/gu, "").trim() })))
   const firstModels = new Map<string, { id: string; name: string }>()
   for (const item of modelElements) if (!firstModels.has(item.id)) firstModels.set(item.id, item)

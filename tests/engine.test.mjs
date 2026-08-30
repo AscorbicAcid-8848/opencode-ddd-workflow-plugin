@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { initialize, prepare, submit, review, status, block, archive, hasFailedVerificationEvidence, containsRequiredConcept, extractApprovedModelContract, queryPseudoEvents, requiresScenarioClarification, validateStageSemantics } from "../dist/engine.js"
+import { initialize, prepare, submit, review, status, block, archive, hasFailedVerificationEvidence, containsRequiredConcept, extractApprovedModelContract, queryPseudoEvents, requiresScenarioClarification, validateMandatoryCompatibilityConstraints, validateStageSemantics } from "../dist/engine.js"
 import { DddWorkflowPlugin, dddLifecycleTool, lifecycleFinalizeMetadata, normalizeReviewDecision } from "../dist/index.js"
 import { renderSections, unfilledHeadings } from "../dist/documents.js"
 import { newChange, openSpecAction, planningArtifacts, runOpenSpec, verifyArchive } from "../dist/openspec.js"
@@ -245,6 +245,27 @@ test("model contract extraction accepts inline-code ids, method signatures, even
   ])
   assert.deepEqual(contract.invariants.map((item) => item.id), [
     "INV-01", "INV-02", "INV-03", "INV-04", "INV-05", "INV-06",
+  ])
+})
+
+test("model contract extraction accepts Chinese labels with canonical names and compact invariant lists", () => {
+  const contract = extractApprovedModelContract([
+    "- ME-01 收藏聚合（Favorite）：聚合根；ME-02 收藏时间（FavoriteTime）：值对象。",
+    "- ME-03 收藏仓储抽象（FavoriteRepository）：save 与 list。",
+    "- src/application.js：ME-04 应用服务、ME-05 收藏列表读模型（应用层）。",
+    "承载不变量：INV-01 收藏唯一、INV-02 收藏时间不可变、INV-03 收藏归属本人。",
+  ].join("\n"))
+  assert.deepEqual(contract.modelElements, [
+    { id: "ME-01", name: "Favorite" },
+    { id: "ME-02", name: "FavoriteTime" },
+    { id: "ME-03", name: "FavoriteRepository" },
+    { id: "ME-04", name: "应用服务" },
+    { id: "ME-05", name: "收藏列表" },
+  ])
+  assert.deepEqual(contract.invariants, [
+    { id: "INV-01", statement: "收藏唯一" },
+    { id: "INV-02", statement: "收藏时间不可变" },
+    { id: "INV-03", statement: "收藏归属本人" },
   ])
 })
 
@@ -1761,13 +1782,42 @@ test("evidence bundle returns bounded cited excerpts and OpenSpec index", async 
     const source = path.join(dir, "src", "ShopService.java")
     await mkdir(path.dirname(source), { recursive: true })
     await writeFile(source, "class ShopService { Result queryShop(Long id) { return Result.ok(id); } }\n", "utf8")
+    await writeFile(path.join(dir, "README.md"), "# Shop\n\n用户自有数据必须通过 JsonFileStore 持久化。\n", "utf8")
     await mkdir(path.join(dir, "openspec", "specs", "current-shop"), { recursive: true })
     const packet = await evidenceBundle(dir, "new-change", ["Shop", "queryShop"])
     assert.equal(packet.schemaVersion, "ddd-evidence-bundle/v1")
     assert.equal(packet.matches[0].file, "src/ShopService.java")
     assert.match(packet.matches[0].excerpts[0].ref, /^code:src\/ShopService\.java#L\d+-L\d+$/u)
     assert.ok(packet.requiredCoverage.includes("事实、假设与待确认项"))
+    assert.deepEqual(packet.mandatoryCompatibilityConstraints, [{
+      ref: "code:README.md#L3-L3",
+      text: "L3: 用户自有数据必须通过 JsonFileStore 持久化。",
+    }])
     assert.deepEqual(packet.openSpecIndex.currentSpecs, ["current-shop"])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("tactical design must trace mandatory repository compatibility constraints", async () => {
+  const dir = await freshProject()
+  try {
+    const workbench = path.join(dir, ".ddd", "workbench")
+    await mkdir(workbench, { recursive: true })
+    await writeFile(path.join(workbench, "evidence-snapshot.json"), JSON.stringify({
+      mandatoryCompatibilityConstraints: [{
+        ref: "code:README.md#L3-L3",
+        text: "L3: 用户自有数据必须通过 JsonFileStore 持久化。",
+      }],
+    }), "utf8")
+    const missing = await validateMandatoryCompatibilityConstraints(
+      dir, "context-tactical-design", "采用进程内收藏仓储，存储介质留到实施前核验。",
+    )
+    assert.equal(missing[0].code, "MANDATORY_COMPATIBILITY_CONSTRAINT_UNTRACED")
+    const covered = await validateMandatoryCompatibilityConstraints(
+      dir, "context-tactical-design", "收藏仓储通过 JsonFileStore 持久化并保持既有测试隔离约束。",
+    )
+    assert.deepEqual(covered, [])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

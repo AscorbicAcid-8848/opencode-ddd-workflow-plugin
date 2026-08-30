@@ -55,6 +55,7 @@ export declare function submit(input: SubmitInput): Promise<Transition & {
     documentPath: string;
     draft?: Record<string, unknown>;
 }>;
+export declare function validateMandatoryCompatibilityConstraints(root: string, scopeId: string | undefined, candidate: string): Promise<ValidationFinding[]>;
 export declare function containsRequiredConcept(text: string, concept: string): boolean;
 export declare function queryPseudoEvents(text: string): string[];
 export declare function extractApprovedModelContract(document: string): {
