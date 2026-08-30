@@ -112,6 +112,9 @@ export async function evidenceBundle(projectRoot: string, workflowId: string, ra
     .filter(({ mandatory }) => mandatory).map(({ mandatory: _mandatory, ...item }) => item)
   const absentTerms = lowered.filter((term) => !seenTerms.has(term))
   const negativeSearchRef = `search:evidence-bundle:${createHash("sha256").update(`${workflowId}\0${files.length}\0${lowered.join("|")}`).digest("hex").slice(0, 12)}`
+  const negativeSearchStatement = absentTerms.length
+    ? `本次完整源码文件扫描未命中这些精确代码词：${absentTerms.map((term) => `\`${term}\``).join("、")}。`
+    : ""
   const bundle = {
     schemaVersion: "ddd-evidence-bundle/v1", terms, expandedSearchTerms: searchTerms, repositoryShape: topLevel, sourceFileCount: files.length,
     matches: matches.slice(0, 8).map(({ file, excerpts }) => ({ file, excerpts })),
@@ -122,9 +125,10 @@ export async function evidenceBundle(projectRoot: string, workflowId: string, ra
       ref: negativeSearchRef,
       absentTerms,
       scope: sourceRoots,
+      statement: negativeSearchStatement,
       rule: "该引用只证明 absentTerms 中的精确代码词在本次完整源码文件扫描中未命中；不得据此声称整个业务能力、模块或其他实体不存在。",
     } : null,
-    citationRule: "事实的 evidence_refs 必须逐字复制 excerpt.ref（code:相对路径#Lx-Ly）；不得只写裸路径。mandatoryCompatibilityConstraints 必须逐项写为兼容性约束，后续设计不得降级为实施前可选核验。未出现的行为只写为 evidence-gap/open-question，不得在缺口中决定新增表、模型、接口或实现；不再扩大搜索。",
+    citationRule: "事实的 evidence_refs 必须逐字复制 excerpt.ref（code:相对路径#Lx-Ly）；不得只写裸路径。使用负向搜索时，observation.statement 必须逐字复制 negativeSearchEvidence.statement，不得追加能力、模块或实体不存在的推论。mandatoryCompatibilityConstraints 必须逐项写为兼容性约束，后续设计不得降级为实施前可选核验。未出现的行为只写为 evidence-gap/open-question，不得在缺口中决定新增表、模型、接口或实现；不再扩大搜索。",
     requiredCoverage: ["事实、假设与待确认项", "工程约束与兼容性", "可执行验收约束", "现状代码证据索引", "验证基线", "OpenSpec历史战略基线"],
     responseBudget: { totalSectionChars: "900-1600", observations: "4-6" },
     nextAction: "依据本 bundle 直接调用 complete-stage；不要逐文件补读、不要先输出草稿或推理。",
@@ -140,7 +144,7 @@ export async function evidenceBundle(projectRoot: string, workflowId: string, ra
     ].slice(0, 8),
     mandatoryCompatibilityConstraints,
     openSpecIndex: bundle.openSpecIndex,
-    authorizedSearchEvidence: absentTerms.length ? [{ ref: negativeSearchRef, absentTerms }] : [],
+    authorizedSearchEvidence: absentTerms.length ? [{ ref: negativeSearchRef, absentTerms, statement: negativeSearchStatement }] : [],
   }
   const workbench = path.join(projectRoot, "openspec", "changes", workflowId, "ddd", ".ddd", "workbench")
   await mkdir(workbench, { recursive: true })

@@ -784,7 +784,7 @@ async function validateSubmission(root, profile, state, stage, input, options = 
                 message: `本阶段全部章节正文共 ${total} 字，建议总计 >= ${minChars} 字。` });
         }
     }
-    findings.push(...await validateStageClaims(state, stage.scopeContract?.id, writableHeadings, input.sections, input.claims));
+    findings.push(...await validateStageClaims(state, stage.scopeContract?.id, writableHeadings, input.sections, input.claims, input.summary));
     findings.push(...validateStageSemantics(state, stage, input));
     if (!options.partial && stage.implementationEvidence)
         findings.push(...await validateImplementationEvidence(state, input));

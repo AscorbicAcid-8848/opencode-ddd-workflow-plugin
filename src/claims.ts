@@ -40,7 +40,13 @@ const nonEmpty = (value: unknown): value is string => typeof value === "string" 
 const observationLevels = new Set(["declared", "wired", "statically-reachable", "runtime-observed", "test-verified"])
 const availabilities = new Set(["operational", "partial", "stub", "absent", "unknown"])
 const absencePattern = /(?:^|(?:当前|现有|既有|代码|系统|仓库|能力|实现|定义|证据|路径|接口|表))[^。；]{0,18}(?:不存在|未发现|尚无|没有|无专门)|(?:只有|仅有)[^。；]{0,30}(?:能力|实现|路径|接口|表|模块)/u
+const absenceMetaPattern = /(?:不存在|未发现|尚无|没有|无专门)[^。；]{0,20}(?:待确认|开放问题|问题|证据|信息|结论|决定|说明)/u
 const currentFactKinds = new Set(["current-behavior-fact", "current-topology-fact"])
+
+function isDomainAbsenceAssertion(text: string): boolean {
+  const compact = text.replace(/\s+/gu, "")
+  return absencePattern.test(compact) && !absenceMetaPattern.test(compact)
+}
 
 function normalizeReferencePath(reference: string): string | null {
   const match = /^(?:code|schema|openspec):([^#]+)(?:#.*)?$/u.exec(reference)
@@ -131,6 +137,7 @@ export async function validateStageClaims(
   writableHeadings: string[],
   sections: Record<string, string>,
   rawClaims: unknown,
+  summary = "",
 ): Promise<ValidationFinding[]> {
   const contract = claimContractFor(scopeId)
   if (!contract) return []
@@ -147,9 +154,12 @@ export async function validateStageClaims(
   const claims = rawClaims as StageClaim[]
   const snapshotFile = path.join(state.artifactRoot, ".ddd", "workbench", "evidence-snapshot.json")
   const snapshot = await exists(snapshotFile) ? await readJson<any>(snapshotFile) : {}
-  const authorizedSearch = new Map<string, string[]>((Array.isArray(snapshot.authorizedSearchEvidence)
-    ? snapshot.authorizedSearchEvidence : []).map((item: any) => [String(item?.ref ?? ""),
-      Array.isArray(item?.absentTerms) ? item.absentTerms.map(String) : []]))
+  const authorizedSearch = new Map<string, { absentTerms: string[]; statement: string }>((Array.isArray(snapshot.authorizedSearchEvidence)
+    ? snapshot.authorizedSearchEvidence : []).map((item: any) => {
+      const absentTerms = Array.isArray(item?.absentTerms) ? item.absentTerms.map(String) : []
+      const fallback = `本次完整源码文件扫描未命中这些精确代码词：${absentTerms.map((term: string) => `\`${term}\``).join("、")}。`
+      return [String(item?.ref ?? ""), { absentTerms, statement: String(item?.statement ?? fallback).trim() }]
+    }))
   const ids = new Set<string>()
   const allowedKinds = new Set(contract.allowedKinds)
   const allowedMaturities = new Set(contract.allowedMaturities)
@@ -197,13 +207,13 @@ export async function validateStageClaims(
         continue
       }
       if (reference.startsWith("search:") && reference !== "search:openspec/specs-and-prior-changes") {
-        const absentTerms = authorizedSearch.get(reference)
-        if (!absentTerms) {
+        const authorization = authorizedSearch.get(reference)
+        if (!authorization) {
           findings.push(finding("SEARCH_EVIDENCE_NOT_ISSUED", `${base}.evidenceRefs`,
             `负向搜索引用不是 evidence-bundle 签发的证据：${reference}。`))
-        } else if (!absentTerms.some((term) => claim.statement.toLocaleLowerCase().includes(term.toLocaleLowerCase()))) {
+        } else if (claim.statement.trim() !== authorization.statement) {
           findings.push(finding("SEARCH_EVIDENCE_SUBJECT_MISMATCH", `${base}.statement`,
-            `该负向搜索只证明这些精确代码词未命中：${absentTerms.join("、")}；不能据此扩大为其他能力或实体不存在。`))
+            `该负向搜索 claim 必须逐字使用签发语句“${authorization.statement}”；不能追加能力、模块或实体不存在的推论。`))
         }
       }
       const relativePath = normalizeReferencePath(reference)
@@ -228,7 +238,7 @@ export async function validateStageClaims(
       }
     }
     const absenceCandidate = claim.statement.replace(/[“"][^”"\n]{0,100}[”"]/gu, "").replace(/\s+/gu, "")
-    if (absencePattern.test(absenceCandidate)) {
+    if (isDomainAbsenceAssertion(absenceCandidate)) {
       if (attributes.availability !== "absent" || !claim.evidenceRefs.some((reference) => reference.startsWith("search:"))) {
         findings.push(finding(
           "ABSENCE_CLAIM_NOT_PROVEN",
@@ -243,12 +253,24 @@ export async function validateStageClaims(
     }
   }
 
-  const narrative = Object.values(sections).join("\n")
-  for (const sentence of sentences(narrative)) {
+  const narrativeParts = [
+    ...(summary ? [{ path: "summary", text: summary }] : []),
+    ...Object.entries(sections).map(([heading, text]) => ({ path: `sections.${heading}`, text })),
+  ]
+  for (const part of narrativeParts) for (const sentence of sentences(part.text)) {
+    const absenceCandidate = sentence.replace(/[“"][^”"\n]{0,100}[”"]/gu, "").replace(/\s+/gu, "")
+    const mappedAbsence = claims.some((claim) =>
+      sentence.includes(claim.statement) || claim.statement.includes(sentence))
+    if (isDomainAbsenceAssertion(absenceCandidate) && !mappedAbsence) findings.push(finding(
+      "UNMAPPED_ABSENCE_ASSERTION",
+      part.path,
+      `正文或摘要包含未登记为 claim 的不存在性结论：${sentence.slice(0, 120)}`,
+      "不存在性结论必须由 evidence-bundle 签发的精确负向搜索 statement 支持；否则改写为证据范围或开放问题。",
+    ))
     if (isUnprovenTargetBehavior(sentence, claims)) {
       findings.push(finding(
         "EVIDENCE_STAGE_TARGET_BEHAVIOR_LEAK",
-        "sections",
+        part.path,
         `现状证据阶段把尚未批准的新功能行为写成了验收规则：${sentence.slice(0, 120)}`,
         "本阶段只记录 AS-IS 行为与兼容约束；新功能触发、结果、授权和异常语义请改为 open-question，交由战略事件风暴和人工里程碑决定。",
       ))
@@ -256,7 +278,7 @@ export async function validateStageClaims(
     if (hasUnnegatedDesignDecision(sentence) && !isProvenCurrentDecision(sentence, claims) && !isDeclaredUncertainty(sentence, claims)) {
       findings.push(finding(
         "EVIDENCE_STAGE_TARGET_DESIGN_LEAK",
-        "sections",
+        part.path,
         `现状证据阶段包含未经当前事实证明的目标设计或交付决定：${sentence.slice(0, 120)}`,
         "删除该决定，或改为 evidence-gap/open-question；目标方案留给战略、战术或交付阶段。",
       ))

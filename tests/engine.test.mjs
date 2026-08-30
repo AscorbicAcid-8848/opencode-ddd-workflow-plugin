@@ -754,6 +754,54 @@ test("evidence stage rejects model-invented negative search references", async (
   }
 })
 
+test("signed negative search evidence cannot be widened into capability absence", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "bounded-negative-search"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
+    assert.ok(packet.negativeSearchEvidence?.statement)
+    const expanded = `${packet.negativeSearchEvidence.statement.slice(0, -1)}，因此收藏能力不存在。`
+    const payload = baselinePayload()
+    payload.sections["证据与追踪"] += `\n\n${expanded}`
+    payload.claims.push({
+      id: "OPEN-WIDENED", kind: "evidence-gap", statement: expanded, maturity: "hypothesis",
+      documentSection: "证据与追踪", authorityRefs: [packet.negativeSearchEvidence.ref],
+      evidenceRefs: [packet.negativeSearchEvidence.ref],
+      attributes: { observationLevel: "statically-reachable", availability: "absent", evidenceSubject: expanded },
+    })
+    const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: "当前摘要声称尚无收藏功能，因此需要新增实现。", ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "SEARCH_EVIDENCE_SUBJECT_MISMATCH"))
+    assert.ok(result.findings.some((finding) => finding.code === "UNMAPPED_ABSENCE_ASSERTION" && finding.path === "summary"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("signed negative search evidence accepts only its bounded issued statement", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "exact-negative-search"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
+    const statement = packet.negativeSearchEvidence.statement
+    const payload = baselinePayload()
+    payload.sections["证据与追踪"] += `\n\n${statement}`
+    payload.claims.push({
+      id: "OPEN-BOUNDED", kind: "evidence-gap", statement, maturity: "hypothesis",
+      documentSection: "证据与追踪", authorityRefs: [packet.negativeSearchEvidence.ref],
+      evidenceRefs: [packet.negativeSearchEvidence.ref],
+      attributes: { observationLevel: "statically-reachable", availability: "absent", evidenceSubject: statement },
+    })
+    const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(!result.findings?.some((finding) => finding.code === "SEARCH_EVIDENCE_SUBJECT_MISMATCH"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test("evidence stage permits a design-looking sentence when it is an explicit evidence gap", async () => {
   const dir = await freshProject()
   try {
