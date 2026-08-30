@@ -13,6 +13,8 @@ export interface DecisionOption {
   id: string
   label: string
   impact?: string
+  resultStatus?: "resolved" | "deferred" | "out-of-scope"
+  deferredToStage?: string
 }
 
 export interface DecisionBlockTarget {
@@ -114,6 +116,7 @@ export interface Checkpoint {
   ambiguityResolution?: unknown
   decisionItems?: DecisionItem[]
   humanReviewSummary?: string
+  claims?: StageClaim[]
 }
 
 export interface WorkflowState {
@@ -139,6 +142,7 @@ export interface WorkflowState {
   implementationBaseline?: { head: string; capturedAt: string }
   deliveryPlan?: DeliveryPlanState
   decisionLedger?: DecisionItem[]
+  baselineClaims?: StageClaim[]
   humanDecisions?: Array<{
     milestone: string
     stage: string

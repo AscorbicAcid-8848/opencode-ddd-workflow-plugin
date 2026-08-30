@@ -147,6 +147,8 @@ export async function validateStageClaims(state, scopeId, writableHeadings, sect
         const fallback = `本次完整源码文件扫描未命中这些精确代码词：${absentTerms.map((term) => `\`${term}\``).join("、")}。`;
         return [String(item?.ref ?? ""), { absentTerms, statement: String(item?.statement ?? fallback).trim() }];
     }));
+    const issuedCodeRefs = new Set((Array.isArray(snapshot.issuedCodeEvidence) ? snapshot.issuedCodeEvidence : [])
+        .map((item) => String(item?.ref ?? "").trim()).filter(Boolean));
     const ids = new Set();
     const allowedKinds = new Set(contract.allowedKinds);
     const allowedMaturities = new Set(contract.allowedMaturities);
@@ -205,6 +207,9 @@ export async function validateStageClaims(state, scopeId, writableHeadings, sect
                 else if (claim.statement.trim() !== authorization.statement) {
                     findings.push(finding("SEARCH_EVIDENCE_SUBJECT_MISMATCH", `${base}.statement`, `该负向搜索 claim 必须逐字使用签发语句“${authorization.statement}”；不能追加能力、模块或实体不存在的推论。`));
                 }
+            }
+            if (reference.startsWith("code:") && !issuedCodeRefs.has(reference)) {
+                findings.push(finding("CODE_EVIDENCE_NOT_ISSUED", `${base}.evidenceRefs`, `代码证据必须逐字使用 evidence-bundle 签发的 excerpt.ref，禁止扩大行范围或补读未签发位置：${reference}。`));
             }
             const relativePath = normalizeReferencePath(reference);
             if (relativePath) {

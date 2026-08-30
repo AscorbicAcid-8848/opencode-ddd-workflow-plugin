@@ -575,11 +575,11 @@ async function completeMilestoneI(dir, workflowId) {
   const requiredConcepts = p.stageCard.qualityContract.requiredContent
     .map((concept) => `### ${concept}\n该业务分析维度已覆盖。`).join("\n\n")
   const sections = Object.fromEntries(p.stageCard.unfilledSectionHeadings.map((heading) => [heading,
-    `### ${heading}结论\n围绕用户目标梳理业务参与者、命令、已经发生的业务事件、规则、异常、补偿、时间约束、读模型和边界线索。本次目标与未来候选明确分离，结构化决策账本中的事项不会进入主流程。\n\n${requiredConcepts}`]))
+    `### ${heading}结论\n围绕用户目标梳理业务参与者、命令、已经发生的业务事件、规则、异常、补偿、时间约束、读模型和边界线索。本次目标与范围外内容明确分离，不越过结构化决策账本。\n\n${requiredConcepts}`]))
   if (p.stageCard.ambiguityContract) {
     sections["战略事件风暴"] += "\n\n候选场景 A：参与者发起业务动作后形成候选业务事件。\n候选场景 B：外部业务事实到达后形成另一条候选事件流。\n人工确认前，任何候选均不进入本次目标或主流程。"
   }
-  return submit({
+  const result = await submit({
     workflowType: "add-feature", workflowId, projectRoot: dir,
     stage: "02-big-picture-event-storm", summary: longSummary, sections,
     ...(p.stageCard.ambiguityContract ? { ambiguityResolution: {
@@ -589,6 +589,9 @@ async function completeMilestoneI(dir, workflowId) {
       recommendedCandidateId: "candidate-a",
     }, decisionItems: milestoneIDecisionItems() } : { decisionItems: [] }),
   })
+  assert.equal(result.findings.filter((finding) => finding.severity === "blocking").length, 0,
+    JSON.stringify(result.findings, null, 2))
+  return result
 }
 
 test("init creates state and milestone skeletons", async () => {
@@ -815,6 +818,30 @@ test("signed negative search evidence accepts only its bounded issued statement"
   }
 })
 
+test("positive code evidence must use an exact excerpt ref issued by the bundle", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "exact-positive-evidence"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    await mkdir(path.join(dir, "src"), { recursive: true })
+    await writeFile(path.join(dir, "src", "app.js"), "export function findShop(id) { return id ? { id } : null }\n", "utf8")
+    const packet = await evidenceBundle(dir, workflowId, ["Shop", "User"])
+    const issued = packet.matches.flatMap((match) => match.excerpts).map((excerpt) => excerpt.ref)[0]
+      ?? packet.projectConventionEvidence.flatMap((item) => item.excerpts).map((excerpt) => excerpt.ref)[0]
+    assert.ok(issued)
+    const expanded = issued.replace(/#L\d+-L\d+$/u, "#L1-L999")
+    const statement = "当前系统包含可验证的既有入口。"
+    const payload = baselinePayload({ fact: statement })
+    payload.claims[0].authorityRefs = [expanded]
+    payload.claims[0].evidenceRefs = [expanded]
+    const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "CODE_EVIDENCE_NOT_ISSUED"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test("evidence stage permits a design-looking sentence when it is an explicit evidence gap", async () => {
   const dir = await freshProject()
   try {
@@ -984,6 +1011,28 @@ test("strategic event storm blocks technical design leakage", async () => {
   }
 })
 
+test("add-feature discovery cannot relabel target rules as current or finalize a boundary", () => {
+  const findings = validateStageSemantics(
+    {
+      workflowType: "add-feature",
+      originalRequest: "新增用户收藏店铺并按收藏时间查询",
+      baselineClaims: [{ id: "FACT-SHOP-QUERY", kind: "current-behavior-fact", statement: "现有店铺查询可返回详情。" }],
+    },
+    { id: "02-big-picture-event-storm", scopeContract: { id: "system-discovery" } },
+    {
+      summary: "形成系统级收藏场景。",
+      sections: {
+        "战略事件风暴": "### 事件时间线\n收藏目标不存在时返回 404（现状已存在规则）。",
+        "热点与边界线索": "收藏天然形成独立业务边界，与店铺查询边界分离。",
+        "备选解释与建议": "### 能力状态分类\n现状已存在：查看店铺。",
+      },
+    },
+  )
+  assert.ok(findings.some((finding) => finding.code === "STRATEGIC_TARGET_RULE_MASQUERADES_AS_CURRENT"))
+  assert.ok(findings.some((finding) => finding.code === "STRATEGIC_CURRENT_CAPABILITY_UNTRACED"))
+  assert.ok(findings.some((finding) => finding.code === "STRATEGIC_DISCOVERY_BOUNDARY_FINALIZED"))
+})
+
 test("scenario clarification remains a stage-card hint while the decision ledger gates every request shape", () => {
   assert.equal(requiresScenarioClarification("新增用户一日光顾店铺轨迹功能"), true)
   assert.equal(requiresScenarioClarification("在当前项目新增用户一日光顾店铺轨迹功能"), true)
@@ -1061,6 +1110,34 @@ test("open-problem language cannot disappear without a typed deferred decision",
     "热点与边界线索": "查询分页与店铺失效后的展示行为均保持为开放问题。",
   }, [])
   assert.ok(findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"))
+})
+
+test("future questions retain their exact section repair path across common wording", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const findings = validateHumanDecisionContract({}, stage, {
+    "业务主题与分析范围": "分页规模与展示字段作为后续约束问题保留。",
+    "异常、补偿与时间约束": "写入失败如何恢复，是后续设计必须回答的热点。",
+    "热点与边界线索": "并发重复意图如何收敛，也是后续设计需要回答的问题。",
+  }, [])
+  const paths = new Set(findings.filter((finding) => finding.code === "UNTRACKED_OPEN_DECISION")
+    .map((finding) => finding.path))
+  assert.deepEqual(paths, new Set([
+    "sections.业务主题与分析范围",
+    "sections.异常、补偿与时间约束",
+    "sections.热点与边界线索",
+  ]))
+})
+
+test("an option that defers or excludes work requires a typed disposition", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const findings = validateHumanDecisionContract({}, stage, { "战略事件风暴": "取消收藏保持为候选。" }, [{
+    id: "DEC-CANCEL", question: "是否包含取消收藏？",
+    options: [{ id: "LATER", label: "延期至后续里程碑" }, { id: "NOW", label: "本次包含" }],
+    recommendationId: "LATER", status: "open",
+    blocks: [{ id: "SCOPE-CANCEL", statement: "取消收藏不属于本次交付", documentSection: "战略事件风暴" }],
+    sourceRefs: ["user-input:original-request"],
+  }])
+  assert.ok(findings.some((finding) => finding.code === "DECISION_OPTION_DISPOSITION_REQUIRED"))
 })
 
 test("a prose decision reference must cite its concrete block target", () => {
@@ -1157,6 +1234,36 @@ test("blocking stage draft is saved, repaired incrementally, and fused after rep
     }
     assert.equal(failed.draft.repeatedFindingSet, 3)
     assert.equal(failed.draft.retryableByModel, false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("a saved section blocker cannot be bypassed by changing only the summary", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "repair-writeset"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...baselinePayload() })
+    const prepared = await prepare({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "02-big-picture-event-storm" })
+    const concepts = prepared.stageCard.qualityContract.requiredContent
+      .map((concept) => `### ${concept}\n该业务分析维度已覆盖。`).join("\n\n")
+    const sections = Object.fromEntries(prepared.stageCard.unfilledSectionHeadings.map((heading) => [heading,
+      `### ${heading}结论\n围绕用户目标形成系统级业务场景、事件、规则、异常、读模型和候选边界线索。\n\n${concepts}`]))
+    sections["热点与边界线索"] += "\n\n分页规模作为后续约束问题保留。"
+    const failed = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "02-big-picture-event-storm", summary: longSummary, sections,
+      decisionItems: milestoneIDecisionItems() })
+    assert.ok(failed.findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"
+      && finding.path === "sections.热点与边界线索"))
+
+    const bypass = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "02-big-picture-event-storm", summary: "已完成中性的阶段摘要，不修改正文。", sections: {} })
+    assert.ok(bypass.findings.some((finding) => finding.code === "REPAIR_WRITESET_NOT_TOUCHED"))
+    const current = await status({ workflowType: "add-feature", workflowId, projectRoot: dir })
+    assert.notEqual(current.requiredAction, "await-human-review")
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -2026,6 +2133,35 @@ test("plain approval accepts only the unique documented recommendation and recor
     const state = (await status({ workflowType: "add-feature", workflowId: "recommended-approval", projectRoot: dir, view: "full" })).state
     assert.equal(state.humanDecisions[0].selectedCandidateId, "candidate-a")
     assert.equal(state.humanDecisions[0].candidateLabel, "参与者主动发起")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("approval preserves a selected deferred option and its receiving stage", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "deferred-approval"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "r" })
+    await completeMilestoneI(dir, workflowId)
+    const stateFile = path.join(dir, "openspec", "changes", workflowId, "ddd", ".ddd", "workflow-state.json")
+    const state = JSON.parse(await readFile(stateFile, "utf8"))
+    state.checkpoints.at(-1).decisionItems = [{
+      id: "DEC-CANCEL", ownerStage: "02-big-picture-event-storm", question: "是否本次包含取消能力？",
+      options: [
+        { id: "LATER", label: "延期到战术事件风暴", resultStatus: "deferred", deferredToStage: "05-design-event-storm" },
+        { id: "NOW", label: "本次包含", resultStatus: "resolved" },
+      ],
+      recommendationId: "LATER", status: "open",
+      blocks: [{ id: "SCOPE-CANCEL", statement: "取消能力不进入当前主流程", documentSection: "战略事件风暴" }],
+      sourceRefs: ["user-input:original-request"],
+    }]
+    await writeFile(stateFile, `${JSON.stringify(state, null, 2)}\n`, "utf8")
+    await review({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "02-big-picture-event-storm", decision: "approve", reviewer: "tester" })
+    const approved = (await status({ workflowType: "add-feature", workflowId, projectRoot: dir, view: "full" })).state
+    assert.equal(approved.decisionLedger[0].status, "deferred")
+    assert.equal(approved.decisionLedger[0].deferredToStage, "05-design-event-storm")
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

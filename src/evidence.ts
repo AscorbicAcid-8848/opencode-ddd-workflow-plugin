@@ -138,6 +138,10 @@ export async function evidenceBundle(projectRoot: string, workflowId: string, ra
   // keeping the stage card much smaller than replaying the complete evidence stage.
   const snapshot = {
     repositoryShape: topLevel,
+    issuedCodeEvidence: [
+      ...conventions.flatMap(({ excerpts }) => excerpts.map(({ ref, text }) => ({ ref, text }))),
+      ...matches.flatMap(({ excerpts }) => excerpts.map(({ ref, text }) => ({ ref, text }))),
+    ],
     codeEvidence: [
       ...mandatoryCompatibilityConstraints,
       ...matches.slice(0, 4).flatMap(({ excerpts }) => excerpts.slice(0, 1)).map(({ ref, text }) => ({ ref, text })),
