@@ -842,6 +842,23 @@ test("positive code evidence must use an exact excerpt ref issued by the bundle"
   }
 })
 
+test("signed negative search prose cannot outlive its typed evidence-gap claim", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "signed-search-claim-link"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
+    const payload = baselinePayload()
+    payload.sections["证据与追踪"] += `\n\n${packet.negativeSearchEvidence.statement}（${packet.negativeSearchEvidence.ref}）`
+    const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "UNMAPPED_SIGNED_SEARCH_EVIDENCE"
+      && finding.path === "sections.证据与追踪"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test("evidence stage permits a design-looking sentence when it is an explicit evidence gap", async () => {
   const dir = await freshProject()
   try {
@@ -1055,7 +1072,7 @@ test("a structured recommended candidate remains non-authoritative until human r
   const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
   const sections = {
     "本次请您确认": "收藏时间采用首次时间，还是每次动作刷新？推荐 TIME-FIRST。",
-    "战略事件风暴": "候选 TIME-FIRST 与 TIME-REFRESH 并列；DEC-TIME/RULE-FAVORITE-TIME blocks 收藏时间规则，人工批准前不进入唯一主流程。",
+    "战略事件风暴": "候选 TIME-FIRST 与 TIME-REFRESH 并列；DEC-FAVORITE-TIME/RULE-FAVORITE-TIME blocks 收藏时间规则，人工批准前不进入唯一主流程。",
     "备选解释与建议": "推荐 TIME-FIRST，因为重复意图不会改变既有收藏事实。",
   }
   const findings = validateHumanDecisionContract({ originalRequest: "新增收藏店铺并按收藏时间查询" }, stage, sections, [{
@@ -1152,6 +1169,15 @@ test("a prose decision reference must cite its concrete block target", () => {
     sourceRefs: ["user-input:original-request"],
   }])
   assert.ok(findings.some((finding) => finding.code === "DECISION_REFERENCE_WITHOUT_BLOCK_TARGET"))
+})
+
+test("authoritative prose cannot reference a decision omitted from the ledger", () => {
+  const stage = { id: "02-big-picture-event-storm", humanGate: true, scopeContract: { id: "system-discovery" } }
+  const findings = validateHumanDecisionContract({}, stage, {
+    "战略事件风暴": "重复收藏语义由 DEC-MISSING/RULE-MISSING 阻塞。",
+  }, [])
+  assert.ok(findings.some((finding) => finding.code === "DECISION_REFERENCE_UNKNOWN"
+    && finding.path === "sections.战略事件风暴"))
 })
 
 test("a downstream milestone cannot reopen an already resolved decision id", () => {
@@ -1264,6 +1290,53 @@ test("a saved section blocker cannot be bypassed by changing only the summary", 
     assert.ok(bypass.findings.some((finding) => finding.code === "REPAIR_WRITESET_NOT_TOUCHED"))
     const current = await status({ workflowType: "add-feature", workflowId, projectRoot: dir })
     assert.notEqual(current.requiredAction, "await-human-review")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("repairing one decision item preserves sibling decisions by stable id", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "decision-item-patch"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t",
+      request: "当用户收藏店铺后记录收藏时间，并可查询自己的收藏" })
+    await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence", summary: longSummary, ...baselinePayload() })
+    const prepared = await prepare({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "02-big-picture-event-storm" })
+    const concepts = prepared.stageCard.qualityContract.requiredContent
+      .map((concept) => `### ${concept}\n该业务分析维度已覆盖。`).join("\n\n")
+    const sections = Object.fromEntries(prepared.stageCard.unfilledSectionHeadings.map((heading) => [heading,
+      `### ${heading}结论\n围绕用户目标形成业务场景、事件、规则、异常、读模型和候选边界线索。\n\n${concepts}`]))
+    const decisions = [
+      {
+        id: "DEC-A", question: "重复收藏如何处理？",
+        options: [{ id: "A1", label: "保持一次" }, { id: "A2", label: "刷新时间" }],
+        recommendationId: "A1", status: "open",
+        blocks: [{ id: "RULE-A", statement: "重复收藏保持一次", documentSection: "战略事件风暴" }],
+        sourceRefs: ["user-input:original-request"],
+      },
+      {
+        id: "DEC-B", question: "默认排序方向是什么？",
+        options: [{ id: "B1", label: "从新到旧" }, { id: "B2", label: "从旧到新" }],
+        recommendationId: "B1", status: "open",
+        blocks: [{ id: "RULE-B", statement: "默认从新到旧", documentSection: "战略事件风暴" }],
+        sourceRefs: ["request:invalid-prefix"],
+      },
+    ]
+    const failed = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "02-big-picture-event-storm", summary: longSummary, sections, decisionItems: decisions })
+    assert.ok(failed.findings.some((finding) => finding.code === "DECISION_SOURCE_REQUIRED"
+      && finding.path === "decisionItems[1].sourceRefs"))
+
+    const repaired = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "02-big-picture-event-storm", summary: "", sections: {},
+      decisionItems: [{ id: "DEC-B", sourceRefs: ["user-input:original-request"] }] })
+    assert.equal(repaired.findings.filter((finding) => finding.severity === "blocking").length, 0,
+      JSON.stringify(repaired.findings, null, 2))
+    const full = (await status({ workflowType: "add-feature", workflowId, projectRoot: dir, view: "full" })).state
+    assert.deepEqual(full.checkpoints.at(-1).decisionItems.map((item) => item.id), ["DEC-A", "DEC-B"])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

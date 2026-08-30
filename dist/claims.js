@@ -247,6 +247,12 @@ export async function validateStageClaims(state, scopeId, writableHeadings, sect
         ...(summary ? [{ path: "summary", text: summary }] : []),
         ...Object.entries(sections).map(([heading, text]) => ({ path: `sections.${heading}`, text })),
     ];
+    for (const part of narrativeParts) {
+        const signedSearchRefs = [...part.text.matchAll(/search:evidence-bundle:[A-Za-z0-9_-]+/gu)].map((match) => match[0]);
+        const unmapped = [...new Set(signedSearchRefs.filter((reference) => !claims.some((claim) => claim.evidenceRefs.includes(reference))))];
+        if (unmapped.length)
+            findings.push(finding("UNMAPPED_SIGNED_SEARCH_EVIDENCE", part.path, `正文引用了 evidence-bundle 签发的负向搜索证据，但完整 claims 中没有对应 evidence-gap：${unmapped.join("、")}。`, "保留该证据的 typed claim 并逐字使用签发 statement，或同时删除正文中的该引用；不得只删 claim。"));
+    }
     for (const part of narrativeParts)
         for (const sentence of sentences(part.text)) {
             const absenceCandidate = sentence.replace(/[“"][^”"\n]{0,100}[”"]/gu, "").replace(/\s+/gu, "");

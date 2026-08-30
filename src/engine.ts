@@ -253,6 +253,13 @@ export function validateHumanDecisionContract(
         .map((line) => ({ path: `sections.${heading}`, line }))),
   ].map((entry) => ({ ...entry, line: entry.line.trim() }))
     .filter((entry) => Boolean(entry.line) && !/^#{1,6}\s/u.test(entry.line))
+  const declaredDecisionIds = new Set(items.map((item) => item.id))
+  const unknownDecisionEntries = decisionProseEntries.filter(({ line }) =>
+    [...line.matchAll(/\bDEC-[A-Za-z0-9._-]+\b/gu)].some((match) => !declaredDecisionIds.has(match[0])))
+  for (const [entryPath, entries] of groupDecisionEntries(unknownDecisionEntries)) findings.push({
+    code: "DECISION_REFERENCE_UNKNOWN", path: entryPath, severity: "blocking",
+    message: `正文引用了未包含在本次完整 decision ledger 中的 DEC-ID：${entries.slice(0, 3).map((entry) => entry.line).join("；")}。修复数组项时必须保留未修改的既有决策。`,
+  })
   const unresolvedEntries = decisionProseEntries
     .filter(({ line }) => OPEN_DECISION_LANGUAGE.test(line))
     .filter(({ line }) => !items.some((item) =>
@@ -598,6 +605,25 @@ function mergeClaims(current: unknown, increment: unknown, replacedHeadings: Set
   return [...merged.values()]
 }
 
+function mergeDecisionItems(current: unknown, increment: unknown): unknown {
+  if (!Array.isArray(current)) return increment
+  if (increment === undefined) return current
+  if (!Array.isArray(increment)) return increment
+  const merged: any[] = current.map((item: any) => structuredClone(item))
+  const indexes = new Map(merged.map((item: any, index) => [String(item?.id ?? "").trim(), index]))
+  for (const patch of increment) {
+    const id = String(patch?.id ?? "").trim()
+    const index = id ? indexes.get(id) : undefined
+    if (index === undefined || !patch || typeof patch !== "object" || Array.isArray(patch)) {
+      merged.push(patch)
+      if (id) indexes.set(id, merged.length - 1)
+      continue
+    }
+    merged[index] = { ...merged[index], ...patch }
+  }
+  return merged
+}
+
 async function mergeStageDraft(root: string, input: SubmitInput): Promise<SubmitInput> {
   const file = stageDraftPath(root, input.stage)
   const draft = await exists(file) ? await readJson<StageDraft>(file) : undefined
@@ -642,7 +668,7 @@ async function mergeStageDraft(root: string, input: SubmitInput): Promise<Submit
     sections,
     claims,
     ambiguityResolution: input.ambiguityResolution ?? draft?.ambiguityResolution,
-    decisionItems: input.decisionItems ?? draft?.decisionItems,
+    decisionItems: mergeDecisionItems(draft?.decisionItems, input.decisionItems),
     plannedSlices: input.plannedSlices ?? draft?.plannedSlices,
     sliceId: input.sliceId ?? draft?.sliceId,
   }

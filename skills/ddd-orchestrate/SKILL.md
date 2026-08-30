@@ -55,6 +55,8 @@ Use no repository/shell exploration in this stage. Copy `excerpt.ref` exactly in
 
 `observations` is required only when the stage card requests current-system claims. Its `heading` is an exact key from `allowedSectionHeadings`, never a nested `###` subtitle. Facts need cited evidence; unknowns do not invent evidence. For implementation include `sliceId`; for delivery-plan include `plannedSlices`. Submit the complete payload once. When a blocking result contains `draft.saved=true`, repair only the sections named by `findings.path`; the runtime retains all other valid content. Stop instead of retrying when `draft.retryableByModel=false`.
 
+When a repair path targets `decisionItems[n]`, resend only the affected decision with the same stable `id`; the runtime patches that item and preserves sibling decisions. Never rename a decision during repair.
+
 Before completing the delivery-plan stage, call `openspec-plan` once with business fields, not Markdown:
 
 ```json
