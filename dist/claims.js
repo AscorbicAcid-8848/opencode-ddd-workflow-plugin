@@ -35,6 +35,7 @@ const nonEmpty = (value) => typeof value === "string" && Boolean(value.trim());
 const observationLevels = new Set(["declared", "wired", "statically-reachable", "runtime-observed", "test-verified"]);
 const availabilities = new Set(["operational", "partial", "stub", "absent", "unknown"]);
 const absencePattern = /(?:^|(?:当前|现有|既有|代码|系统|仓库|能力|实现|定义|证据|路径|接口|表))[^。；]{0,18}(?:不存在|未发现|尚无|没有|无专门)|(?:只有|仅有)[^。；]{0,30}(?:能力|实现|路径|接口|表|模块)|(?:属于|为|视为)全新(?:业务)?(?:能力|功能)/u;
+const capabilityAbsencePattern = /(?:当前|现有|既有|代码|源码|仓库|系统|能力|功能|模块)[^。；]{0,18}无(?:任何)?[^。；]{0,18}(?:实现|功能|能力|模块|接口|端点|路由|定义)/u;
 const absenceMetaPattern = /(?:不存在|未发现|尚无|没有|无专门)[^。；]{0,20}(?:待确认|开放问题|问题|证据|信息|结论|决定|说明)/u;
 const currentFactKinds = new Set(["current-behavior-fact", "current-topology-fact"]);
 const currentAuthorityKinds = new Set([
@@ -44,7 +45,7 @@ const currentAuthorityKinds = new Set([
 ]);
 function isDomainAbsenceAssertion(text) {
     const compact = text.replace(/\s+/gu, "");
-    return absencePattern.test(compact) && !absenceMetaPattern.test(compact);
+    return (absencePattern.test(compact) || capabilityAbsencePattern.test(compact)) && !absenceMetaPattern.test(compact);
 }
 function normalizeReferencePath(reference) {
     const match = /^(?:code|schema|openspec):([^#]+)(?:#.*)?$/u.exec(reference);

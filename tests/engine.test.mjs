@@ -1004,6 +1004,35 @@ test("exact-term negative search cannot be widened into a completely new capabil
   }
 })
 
+test("signed term absence cannot become no implementation claims in summary or prose", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "no-implementation-inference"
+    await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
+    const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
+    const statement = packet.negativeSearchEvidence.statement
+    const payload = baselinePayload()
+    payload.sections["输入场景与现状事实"] += "\n\n假设：复用既有身份机制（待确认，源码无收藏实现）。"
+    payload.sections["证据与追踪"] += `\n\n${statement}`
+    payload.claims.push({
+      id: "OPEN-BOUNDED-ONLY", kind: "evidence-gap", statement, maturity: "hypothesis",
+      documentSection: "证据与追踪", authorityRefs: [packet.negativeSearchEvidence.ref],
+      evidenceRefs: [packet.negativeSearchEvidence.ref],
+      attributes: { observationLevel: "statically-reachable", availability: "unknown", evidenceSubject: statement },
+    })
+    const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
+      stage: "01-current-evidence",
+      summary: "基于现有代码确认系统路由与认证明确，收藏功能当前无任何实现，历史规格为空。",
+      ...payload })
+    assert.ok(result.findings.some((finding) => finding.code === "UNMAPPED_ABSENCE_ASSERTION"
+      && finding.path === "summary"))
+    assert.ok(result.findings.some((finding) => finding.code === "UNMAPPED_ABSENCE_ASSERTION"
+      && finding.path === "sections.输入场景与现状事实"))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test("evidence stage permits a design-looking sentence when it is an explicit evidence gap", async () => {
   const dir = await freshProject()
   try {
