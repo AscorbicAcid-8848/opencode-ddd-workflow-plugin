@@ -1,4 +1,5 @@
 import type { WorkflowType } from "./types.js";
+export type RequirementDelta = "ADDED" | "MODIFIED";
 export interface DeliveryScenario {
     name: string;
     given?: string;
@@ -13,7 +14,30 @@ export interface DeliveryRequirement {
 export interface DeliveryCapability {
     id: string;
     title?: string;
+    /**
+     * OpenSpec requirement delta. Feature/greenfield plans default to ADDED;
+     * refactoring plans default to MODIFIED and may not silently widen scope.
+     */
+    delta?: RequirementDelta;
     requirements: DeliveryRequirement[];
+}
+export interface RefactorBehaviorProtection {
+    /** Stable IDs for approved or recovered AS-IS scenarios. */
+    baselineScenarioRefs: string[];
+    /** Real characterization tests that execute the preserved behavior. */
+    characterizationTests: string[];
+    /** Observable semantics that must remain equivalent before and after. */
+    preservedSemantics: string[];
+    /** How legacy and target paths coexist while this slice is deployed. */
+    coexistenceStrategy: string;
+}
+export interface RollbackContract {
+    /** Observable condition that requires rollback. */
+    trigger: string;
+    /** Ordered, executable rollback actions. */
+    steps: string[];
+    /** Commands or observations proving rollback restored the approved state. */
+    verification: string[];
 }
 export interface DeliverySlice {
     id: string;
@@ -28,7 +52,9 @@ export interface DeliverySlice {
     testPaths: string[];
     verification: string[];
     compatibility: string;
-    rollback: string;
+    /** Required for refactor-system. */
+    behaviorProtection?: RefactorBehaviorProtection;
+    rollback: RollbackContract;
 }
 export interface StructuredDeliveryPlan {
     title: string;
@@ -58,27 +84,24 @@ export interface ApprovedModelContract {
 }
 export interface DeliveryCompilationContext {
     workflowType?: WorkflowType;
+    /** Only behavior-preserving refactors may omit Delta Specs. */
+    skipSpecs?: boolean;
 }
-/**
- * Machine-readable evidence for workflow-specific delivery obligations.
- *
- * Milestone V is compiled only after `validateStructuredPlan` succeeds.  This
- * projection deliberately derives refactoring obligations from typed slice
- * fields instead of asking a Markdown phrase matcher to rediscover them.
- */
+/** Machine-readable evidence for workflow-specific delivery obligations. */
 export interface DeliveryPlanSemanticEvidence {
     sliceCount: number;
     migrationVerticalSlices: boolean;
     behaviorProtection: boolean;
     independentRollback: boolean;
 }
-export declare function deliveryPlanSemanticEvidence(plan: StructuredDeliveryPlan, context?: DeliveryCompilationContext): DeliveryPlanSemanticEvidence;
 export declare function normalizeStructuredPlan(raw: any, current?: StructuredDeliveryPlan): StructuredDeliveryPlan;
-export declare function validateStructuredPlan(plan: StructuredDeliveryPlan): PlanFinding[];
-export declare function compileStructuredPlan(plan: StructuredDeliveryPlan, workflowId: string): {
+export declare function deliveryPlanSemanticEvidence(plan: StructuredDeliveryPlan, context?: DeliveryCompilationContext): DeliveryPlanSemanticEvidence;
+export declare function validateStructuredPlan(plan: StructuredDeliveryPlan, context?: DeliveryCompilationContext): PlanFinding[];
+export declare function compileStructuredPlan(plan: StructuredDeliveryPlan, workflowId: string, context?: DeliveryCompilationContext): {
     proposal: string;
     specs: {
         capability: string;
+        delta: RequirementDelta;
         content: string;
     }[];
     design: string;
@@ -102,7 +125,9 @@ export declare function compileStructuredPlan(plan: StructuredDeliveryPlan, work
             testPaths: string[];
             verification: string[];
             compatibility: string;
-            rollback: string;
+            /** Required for refactor-system. */
+            behaviorProtection?: RefactorBehaviorProtection;
+            rollback: RollbackContract;
         }[];
         sourceHash: string;
     };

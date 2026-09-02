@@ -85,37 +85,76 @@ const validStructuredPlan = {
   slices: [{ id: "S1", title: "记录并查询访问轨迹", outcome: "用户可以看到当天轨迹", consumer: "ShopController",
     dependsOn: [], acceptanceCriteria: ["能够返回当天轨迹"], modelElementIds: ["ME-01"], invariantIds: ["INV-01"], productionPaths: ["src/main/java/com/hmdp/visit/VisitTrail.java"],
     testPaths: ["src/test/java/com/hmdp/visit/VisitTrailTest.java"], verification: ["mvn -Dtest=VisitTrailTest test"],
-    compatibility: "保留既有商铺详情响应", rollback: "revert slice commit" }],
+    compatibility: "保留既有商铺详情响应", rollback: { trigger: "切片验收失败", steps: ["revert slice commit"], verification: ["重新运行 VisitTrailTest"] } }],
 }
 
-// Reduced from the Codex six-way failure
-// `legacy-shop-access-records-refactor/.ddd/delivery/plan.json`.  Both slices
-// had complete typed compatibility/rollback fields, but milestone V was
-// rejected because its deterministic prose did not repeat two profile labels.
+// Reduced from a real deterministic milestone-V regression. Keep this fixture
+// independent from feature examples so the regression proves workflow semantics,
+// not one shop/Java/Maven scenario.
 const refactorRoadmapRegressionPlan = {
-  ...validStructuredPlan,
-  title: "遗留店铺访问记录行为保持重构",
-  objective: "保持公开调用、错误语义、排序与 JSON 格式，将规则迁入批准模型。",
+  title: "遗留账户摘要行为保持重构",
+  objective: "保持公开读取、错误语义、字段顺序和序列化格式，将规则迁入批准模型。",
   nonGoals: ["不新增公开接口", "不迁移存储介质"],
+  designDecisions: ["沿用批准的 AccountSummary 上下文和模型合同。"],
+  capabilities: [{
+    id: "account-summary",
+    delta: "MODIFIED",
+    requirements: [{
+      name: "保持账户摘要读取契约",
+      rule: "保持现有账户摘要的成功字段、拒绝语义与字段顺序",
+      scenarios: [{ name: "授权读取", given: "主体已获授权", when: "主体读取账户摘要", then: "返回与基线等价的批准字段" }],
+    }],
+  }],
   slices: [
     {
-      ...validStructuredPlan.slices[0],
       id: "S1",
-      title: "记录访问路径迁入批准模型",
-      outcome: "recordShopVisit 的成功、拒绝、排序和保存结果保持不变。",
-      consumer: "现有 recordShopVisit 调用方与 characterization tests",
-      compatibility: "先通过记录路径特征测试，再让原入口委派给批准的记录用例；JSON 不迁移。",
-      rollback: "独立 Git 提交；revert S1 即恢复原记录流程。",
+      title: "授权读取路径迁入批准模型",
+      outcome: "readAccountSummary 的成功、拒绝和序列化结果保持不变。",
+      consumer: "现有账户页面与 characterization tests",
+      dependsOn: [],
+      acceptanceCriteria: ["授权读取和身份拒绝与基线等价"],
+      modelElementIds: ["ME-01"],
+      invariantIds: ["INV-01"],
+      productionPaths: ["Sources/AccountSummary/ReadAccountSummary.swift"],
+      testPaths: ["Tests/AccountSummaryCharacterizationTests.swift"],
+      verification: ["swift test --filter AccountSummaryCharacterizationTests"],
+      compatibility: "先通过读取路径特征测试，再让原入口委派给批准用例；序列化格式不迁移。",
+      behaviorProtection: {
+        baselineScenarioRefs: ["BASELINE-account-summary-success", "BASELINE-account-summary-denied"],
+        characterizationTests: ["Tests/AccountSummaryCharacterizationTests.swift"],
+        preservedSemantics: ["成功字段、身份拒绝和字段顺序保持不变"],
+        coexistenceStrategy: "原入口先委派到批准用例，验收前保留旧适配器",
+      },
+      rollback: {
+        trigger: "读取路径特征测试或兼容验证失败",
+        steps: ["revert S1"],
+        verification: ["重新运行 AccountSummaryCharacterizationTests"],
+      },
     },
     {
-      ...validStructuredPlan.slices[0],
       id: "S2",
-      title: "按日查询路径迁入批准模型",
-      outcome: "listDailyVisits 的身份拒绝、严格筛选和顺序保持不变。",
-      consumer: "现有 listDailyVisits 调用方与 characterization tests",
+      title: "缓存回源路径迁入批准模型",
+      outcome: "缓存未命中时的回源、错误传播和结果顺序保持不变。",
+      consumer: "现有账户页面的缓存未命中路径与 characterization tests",
       dependsOn: ["S1"],
-      compatibility: "复用 S1 已验证的仓储端口，原查询入口只进行委派。",
-      rollback: "独立 Git 提交；revert S2 只恢复原查询流程。",
+      acceptanceCriteria: ["缓存未命中和回源失败与基线等价"],
+      modelElementIds: ["ME-01"],
+      invariantIds: ["INV-01"],
+      productionPaths: ["Sources/AccountSummary/AccountSummaryCacheAdapter.swift"],
+      testPaths: ["Tests/AccountSummaryCacheCharacterizationTests.swift"],
+      verification: ["swift test --filter AccountSummaryCacheCharacterizationTests"],
+      compatibility: "复用 S1 已验证的读取端口，原缓存入口只进行委派。",
+      behaviorProtection: {
+        baselineScenarioRefs: ["BASELINE-account-summary-cache-miss", "BASELINE-account-summary-upstream-error"],
+        characterizationTests: ["Tests/AccountSummaryCacheCharacterizationTests.swift"],
+        preservedSemantics: ["缓存未命中、错误传播和结果顺序保持不变"],
+        coexistenceStrategy: "缓存入口委派到新端口，S2 验收前保留旧回源适配器",
+      },
+      rollback: {
+        trigger: "缓存回源特征测试或顺序验证失败",
+        steps: ["revert S2"],
+        verification: ["重新运行 AccountSummaryCacheCharacterizationTests"],
+      },
     },
   ],
 }
@@ -132,14 +171,14 @@ test("structured delivery plan compiles OpenSpec artifacts and an executable sli
 
 test("refactor delivery evidence is derived from typed slices and compiles all migration obligations", () => {
   const plan = normalizeStructuredPlan(refactorRoadmapRegressionPlan)
-  assert.deepEqual(validateStructuredPlan(plan), [])
+  assert.deepEqual(validateStructuredPlan(plan, { workflowType: "refactor-system" }), [])
   assert.deepEqual(deliveryPlanSemanticEvidence(plan, { workflowType: "refactor-system" }), {
     sliceCount: 2,
     migrationVerticalSlices: true,
     behaviorProtection: true,
     independentRollback: true,
   })
-  const compiled = compileDeliveryMilestoneSections(plan, "legacy-shop-access-records-refactor", {}, {
+  const compiled = compileDeliveryMilestoneSections(plan, "legacy-account-summary-refactor", {}, {
     workflowType: "refactor-system",
   })
   const candidate = Object.values(compiled.sections).join("\n")
@@ -425,9 +464,9 @@ test("refactor openspec-plan reaches milestone V from the typed two-slice migrat
   const dir = await freshProject()
   const context = { sessionID: "refactor-plan-regression", directory: dir, worktree: dir, abort: new AbortController().signal, metadata() {}, async ask() {} }
   try {
-    await dddLifecycleTool.execute({ action: "init", workflow_type: "refactor-system", workflow_id: "legacy-shop-access-records-refactor",
+    await dddLifecycleTool.execute({ action: "init", workflow_type: "refactor-system", workflow_id: "legacy-account-summary-refactor",
       input: { title: "遗留店铺访问记录重构", request: "保持全部公开行为，将店铺访问记录逐步迁入批准的 DDD 模型" } }, context)
-    const root = path.join(dir, "openspec", "changes", "legacy-shop-access-records-refactor", "ddd")
+    const root = path.join(dir, "openspec", "changes", "legacy-account-summary-refactor", "ddd")
     const stateFile = path.join(root, ".ddd", "workflow-state.json")
     const state = JSON.parse(await readFile(stateFile, "utf8"))
     state.checkpoints.push({ checkpointId: 4, stage: "06-pilot-tactical-design", milestone: "IV", summary: longSummary,

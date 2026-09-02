@@ -42,7 +42,7 @@ For `system-discovery`, treat `baselineClaims` as the only AS-IS authority. In t
 3. For `01-current-evidence` only, derive 2–6 stable business/code terms and call once:
 
 ```json
-{"action":"evidence-bundle","input":{"stage":"01-current-evidence","terms":["Shop","UserHolder","view","trail"]}}
+{"action":"evidence-bundle","input":{"stage":"01-current-evidence","terms":["Account","Principal","read","state"]}}
 ```
 
 Use no repository/shell exploration in this stage. Copy `excerpt.ref` exactly into `evidence_refs`; cover `requiredCoverage`; packet-external knowledge is an `evidence-gap` or `open-question`, never a proposed table/model/API. Stay within `responseBudget`.
@@ -60,7 +60,7 @@ When a repair path targets `decisionItems[n]`, resend only the affected decision
 Before completing the delivery-plan stage, call `openspec-plan` once with business fields, not Markdown:
 
 ```json
-{"action":"openspec-plan","plan":{"title":"...","objective":"...","nonGoals":[],"designDecisions":[],"capabilities":[{"id":"kebab-case","requirements":[{"name":"...","rule":"...","scenarios":[{"name":"...","given":"...","when":"...","then":"..."}]}]}],"slices":[{"id":"S1","title":"...","outcome":"...","consumer":"...","dependsOn":[],"acceptanceCriteria":["..."],"modelElementIds":["ME-01"],"invariantIds":["INV-01"],"productionPaths":["..."],"testPaths":["..."],"verification":["..."],"compatibility":"...","rollback":"..."}]}}
+{"action":"openspec-plan","plan":{"title":"...","objective":"...","nonGoals":[],"designDecisions":[],"capabilities":[{"id":"kebab-case","requirements":[{"name":"...","rule":"...","scenarios":[{"name":"...","given":"...","when":"...","then":"..."}]}]}],"slices":[{"id":"S1","title":"...","outcome":"...","consumer":"...","dependsOn":[],"acceptanceCriteria":["..."],"modelElementIds":["ME-01"],"invariantIds":["INV-01"],"productionPaths":["..."],"testPaths":["..."],"verification":["..."],"compatibility":"...","behaviorProtection":{"baselineScenarioRefs":["BASELINE-..."],"characterizationTests":["..."],"preservedSemantics":["..."],"coexistenceStrategy":"..."},"rollback":{"trigger":"...","steps":["..."],"verification":["..."]}}]}}
 ```
 
 The runtime compiles proposal, Delta Specs, design, tasks, `plan.json`, and `roadmap.json`. `plan` is a top-level tool argument, never a JSON string in `input`. If it returns findings, resend only affected entries as top-level `plan` with `mode=repair`; the server draft preserves everything else. Do not call `section` or `finalize`. After `status=ready`, call only `complete-stage` with an empty input. The runtime deterministically compiles milestone V from the validated plan and approved model contract and sets `plannedSlices`; never resend or rewrite milestone-V sections. Only behavior-preserving refactoring may use `skipSpecs:true`.

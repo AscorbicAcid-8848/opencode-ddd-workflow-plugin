@@ -83,7 +83,7 @@ Review:
   "resolution": { "selectedCandidateId": "browse-trigger" } } }
 ```
 
-Delivery planning uses structured data rather than model-authored OpenSpec Markdown. Each slice declares its stable ID, dependencies, real consumer, acceptance criteria, `ME-*`/`INV-*` coverage, paths, verification, compatibility, and rollback. The runtime compiles the artifacts and only dependency-ready approved slice IDs can enter Coding.
+Delivery planning uses structured data rather than model-authored OpenSpec Markdown. Each slice declares its stable ID, dependencies, real consumer, acceptance criteria, `ME-*`/`INV-*` coverage, paths, verification, compatibility, a typed behavior-protection contract for refactors, and a rollback contract with trigger, ordered steps, and recovery verification. The runtime compiles the artifacts and only dependency-ready approved slice IDs can enter Coding.
 
 ## Architecture
 

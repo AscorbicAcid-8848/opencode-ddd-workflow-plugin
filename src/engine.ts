@@ -12,6 +12,11 @@ import type {
 } from "./types.js"
 import { WorkflowError } from "./types.js"
 import { claimContractFor, validateStageClaims } from "./claims.js"
+import {
+  BUSINESS_RULE_FAMILIES, deferredRuleFamilies, invariantCoversClause, queryPseudoEvents,
+  requestedInvariantClauses, requestedTermDistinctions, textCoversDistinction,
+} from "./domain-semantics.js"
+export { queryPseudoEvents } from "./domain-semantics.js"
 
 export interface InitInput extends Identity { title: string; request: string }
 export interface PrepareInput extends Identity { stage?: string }
@@ -1067,47 +1072,6 @@ export function containsRequiredConcept(text: string, concept: string): boolean 
   return false
 }
 
-export function queryPseudoEvents(text: string): string[] {
-  const chinese = /(?:事件|领域事件|\bemits\b)\s*[：:]?\s*([^→\n。；]{0,40}(?:查询|详情|列表|轨迹|结果|页面)[^→\n。；]{0,20}(?:已查询|已返回|已展示|已读取|已生成|已形成|查询已完成))/giu
-  const english = /(?:事件|领域事件|\bemits\b)\s*[：:]?\s*([A-Za-z]*(?:Query|Trail|List|Result|View)[A-Za-z]*(?:Returned|Queried|Loaded|Displayed)\b)/giu
-  const queryChains = text.split(/\r?\n/u).flatMap((line) => {
-    if (!/(?:查询|读取|检索|获取|列表|\bquery\b|\bread\b)/iu.test(line) || !/(?:→|->)/u.test(line)) return []
-    const segments = line.split(/(?:→|->)/u).map((item) => item.trim())
-    const queryIndex = segments.findIndex((item) => /(?:查询|读取|检索|获取|\bquery\b|\bread\b)/iu.test(item))
-    if (queryIndex < 0) return []
-    const candidates: string[] = []
-    // A line may contain `query -> returns read model -> command -> emits event`.
-    // Only the result portion of the query belongs to the query chain; scanning
-    // through a later command used to misclassify its genuine state-changing
-    // event as a query-completion pseudo event.
-    for (const segment of segments.slice(queryIndex + 1)) {
-      if (/(?:[（(]\s*(?:命令|command)\s*[）)]|(?:命令|command)\s*[：:]|\bissues?\s+command\b)/iu.test(segment)) break
-      const explicitReadModel = /(?:\breturns?\b|读模型|read model|非领域事件)/iu.test(segment)
-      const declaredEvent = /(?:🟧|领域事件|\bevent\b|\bemits\b)/iu.test(segment)
-      const resultDisguisedAsFact = /(?:轨迹|列表|详情|结果|页面|视图|报告|数据)[^。；]{0,20}(?:已生成|已形成|已返回|已查询|已读取|已加载|已展示)/u.test(segment)
-      if (!/(?:读模型|read model|非领域事件)/iu.test(segment) && (declaredEvent || resultDisguisedAsFact)) {
-        candidates.push(segment)
-      }
-      // An explicit return/read-model segment resolves this query. Anything to
-      // its right is a subsequent interaction, even when the author omitted a
-      // `(命令)` label on the following business action.
-      if (explicitReadModel) break
-    }
-    return candidates.map((segment) => segment
-      .replace(/^(?:🟧\s*|领域事件\s*[：:]?\s*|事件\s*[：:]?\s*)/iu, "")
-      .replace(/\([^)]*\)\s*$/u, "")
-      .replace(/[。；;]+$/u, "")
-      .trim())
-  })
-  const standaloneEnglish = [...text.matchAll(/\b[A-Za-z]*(?:Query|Trail|List|Result|View)[A-Za-z]*(?:Returned|Queried|Loaded|Displayed)\b/gu)]
-    .map((match) => match[0])
-  return [...new Set([
-    ...[...text.matchAll(chinese), ...text.matchAll(english)].map((match) => match[1].trim()),
-    ...queryChains,
-    ...standaloneEnglish,
-  ])]
-}
-
 function approvedSemanticContext(state: WorkflowState): string {
   return [
     state.originalRequest ?? "",
@@ -1227,7 +1191,7 @@ export function extractApprovedModelContract(document: string) {
     const id = match[1]
     const rawTail = text.slice((match.index ?? 0) + match[0].length, (match.index ?? 0) + match[0].length + 140)
     // Identifiers are frequently wrapped independently in Markdown, for
-    // example `` `ME-04` FavoriteShop.handle(...) ``. Remove only that closing
+    // example `` `ME-04` ApprovedAggregate.handle(...) ``. Remove only that closing
     // marker; the following definition still has to match a trusted shape.
     const clause = rawTail.split(/[；;。|\n]/u, 1)[0].replace(/^\s*[`*]{1,2}\s*/u, "").trim()
     if (!clause || /^[\/、,，→]/u.test(clause)) continue
@@ -1336,16 +1300,7 @@ export function validateStageSemantics(state: WorkflowState, stage: any, input: 
         "战略事件风暴只表达业务事件流、参与者、规则、异常和边界线索；技术证据只能放入证据章节")
     }
     const eventStorm = String(input.sections?.["战略事件风暴"] ?? "")
-    const eventMarker = /(?:领域事件|事件\s*[：:]|[（(]\s*事件\s*[）)]|⚡|\bemits\b)/iu
-    const pseudoQuery = /(?:查询|详情|列表|轨迹|结果|页面)[^。；\n]{0,20}(?:已查询|已返回|已展示|已读取|已生成|已形成|查询已完成)/u
-    const declaredQueryResults = eventStorm.split(/\r?\n/u).flatMap((line) => {
-      const declaredList = /(?:领域事件|事件)\s*[：:]|⚡|[（(]\s*事件\s*[）)]/u.test(line)
-      return line.split(/[；;]/u).map((segment) => segment.trim()).filter((segment) =>
-        pseudoQuery.test(segment)
-        && (declaredList || eventMarker.test(segment) || /(?:→|->)/u.test(segment))
-        && !/(?:读模型|非领域事件)/u.test(segment))
-    })
-    const pseudoEvents = [...new Set([...queryPseudoEvents(eventStorm), ...declaredQueryResults])]
+    const pseudoEvents = queryPseudoEvents(eventStorm)
     if (pseudoEvents.length) addFinding(
       "STRATEGIC_EVENT_NOT_STATE_CHANGE", "战略事件风暴", pseudoEvents,
       "查询、返回、展示或读取完成属于读模型结果，不是领域主体状态变化，不能列为过去时领域事件",
@@ -1428,31 +1383,30 @@ export function validateStageSemantics(state: WorkflowState, stage: any, input: 
     const designText = entries.map(([, text]) => text).join("\n")
     const domainText = String(input.sections?.["领域模型设计"] ?? "")
     const approvedContext = approvedSemanticContext(state)
-    const automaticCapture = /(?:每次|当).{0,30}成功.{0,30}(?:记录|保存)|成功.{0,20}(?:时|后).{0,20}(?:记录|保存)|(?:详情页|既有业务路径)[^。；\n]{0,40}(?:访问|成功)?[^。；\n]{0,20}触发/u.test(approvedContext)
-    const explicitCaptureEndpoint = /POST\s+\/[\w{}\-/?=]*(?:view|record|track|trail|history)/iu.test(designText)
-    const existingSuccessHook = /(?:成功路径|成功返回|查询成功|详情成功).{0,50}(?:调用|触发|记录)/u.test(designText)
-    if (automaticCapture && explicitCaptureEndpoint && existingSuccessHook) {
-      addFinding("TACTICAL_DUPLICATE_EXTERNAL_TRIGGER", "公开接口与 DTO 契约", ["POST capture endpoint"],
-        "原始场景要求由既有业务成功自动记录，设计又暴露独立写入端点会形成第二个未授权触发入口；只保留既有成功路径内的应用服务调用")
+    const automaticSideEffect = /(?:每次|当).{0,40}成功.{0,40}(?:记录|保存|写入|创建)|成功.{0,24}(?:时|后).{0,24}(?:记录|保存|写入|创建)|既有业务路径[^。；\n]{0,48}(?:调用|触发|产生)/u.test(approvedContext)
+    const explicitSideEffectEndpoint = /(?:POST|PUT|PATCH)\s+\/[\w{}\-/?=&.]*(?:capture|record|track|history|log|append)/iu.test(designText)
+    const existingSuccessHook = /(?:成功路径|成功返回|处理成功)[^。；\n]{0,56}(?:调用|触发|记录|保存|写入|创建)/u.test(designText)
+    if (automaticSideEffect && explicitSideEffectEndpoint && existingSuccessHook) {
+      addFinding("TACTICAL_DUPLICATE_EXTERNAL_TRIGGER", "公开接口与 DTO 契约", ["duplicate side-effect endpoint"],
+        "已批准场景要求由既有成功路径自动产生副作用，设计又暴露独立写入端点会形成第二个未授权触发入口")
     }
     const aggregateOrmMerge = [...designText.matchAll(/[^。；\n]{0,30}(?:聚合根\s*[+＋/]\s*(?:MyBatis|JPA|ORM|数据库实体)|(?:MyBatis|JPA|ORM)\s*(?:实体)?\s*[+＋/]\s*聚合根)[^。；\n]{0,30}/giu)].map((match) => match[0].trim())
     if (aggregateOrmMerge.length) addFinding("TACTICAL_AGGREGATE_INFRASTRUCTURE_MERGE", "领域模型设计", aggregateOrmMerge,
-      "聚合根是领域模型，不能同时充当 MyBatis/JPA/ORM 持久化实体；请分别定义领域模型与基础设施映射模型/适配器")
+      "聚合根是领域模型，不能同时充当 ORM 持久化实体；请分别定义领域模型与基础设施映射模型/适配器")
     const original = state.originalRequest ?? ""
-    if (automaticCapture && !/INV-\d+[^。\n]{0,120}(?:每次|每一)[^。\n]{0,80}成功[^。\n]{0,80}(?:恰好|一条|一次)/u.test(domainText)) {
-      addFinding("TACTICAL_INVARIANT_EXACTLY_ONE_MISSING", "领域模型设计", ["每次成功查看恰好一条记录"],
-        "原始请求的强业务约束必须成为拥有该行为的聚合不变量，不能只写在阶段输入或应用服务说明中")
-    }
-    const repeatedViews = /(?:重复|同一[^。；]{0,20}多次)[^。；]{0,30}(?:保留|不去重)/u.test(original)
-    if (repeatedViews && !/INV-\d+[^。\n]{0,120}(?:重复|多次)[^。\n]{0,100}(?:保留|不去重|独立)/u.test(domainText)) {
-      addFinding("TACTICAL_INVARIANT_DUPLICATES_MISSING", "领域模型设计", ["重复查看逐条保留"],
-        "重复行为的保留/去重语义必须由聚合不变量明确拥有")
-    }
-    const viewNotVisit = /页面查看[^。；]{0,20}(?:不表示|不等于)[^。；]{0,20}(?:到店|实际到店)/u.test(original)
-    if (viewNotVisit && !/页面查看[^。；\n]{0,30}(?:不表示|不等于)[^。；\n]{0,30}(?:到店|实际到店)/u.test(domainText)) {
-      addFinding("TACTICAL_UBIQUITOUS_LANGUAGE_DISTINCTION_MISSING", "领域模型设计", ["页面查看不等于实际到店"],
-        "原始请求明确的业务术语边界必须进入领域模型，防止实现把两个概念合并")
-    }
+    const cardinalityClauses = requestedInvariantClauses(original, "cardinality")
+      .filter((clause) => !invariantCoversClause(domainText, clause))
+    if (cardinalityClauses.length) addFinding("TACTICAL_INVARIANT_EXACTLY_ONE_MISSING", "领域模型设计", cardinalityClauses.slice(0, 4),
+      "原始请求中的数量或唯一性约束必须成为拥有该行为的聚合不变量")
+    const repeatClauses = requestedInvariantClauses(original, "repeat")
+      .filter((clause) => !invariantCoversClause(domainText, clause))
+    if (repeatClauses.length) addFinding("TACTICAL_INVARIANT_DUPLICATES_MISSING", "领域模型设计", repeatClauses.slice(0, 4),
+      "原始请求中的重复、去重或幂等语义必须由聚合不变量明确拥有")
+    const missingDistinctions = requestedTermDistinctions(original)
+      .filter((distinction) => !textCoversDistinction(domainText, distinction))
+    if (missingDistinctions.length) addFinding("TACTICAL_UBIQUITOUS_LANGUAGE_DISTINCTION_MISSING", "领域模型设计",
+      missingDistinctions.slice(0, 4).map((item) => item.statement),
+      "原始请求明确的业务术语边界必须进入领域模型，防止实现合并不同概念")
     const moduleText = String(input.sections?.["模块与分层设计"] ?? "")
     const directMapperDependency = [...moduleText.matchAll(/[^。；\n]{0,40}(?:app(?:lication)?service|应用服务)[^。；\n]{0,20}(?:→|依赖)[^。；\n]{0,20}mapper[^。；\n]{0,30}/giu)].map((match) => match[0].trim())
     if (directMapperDependency.length) addFinding("TACTICAL_APPLICATION_INFRASTRUCTURE_DEPENDENCY", "模块与分层设计", directMapperDependency,
@@ -1486,7 +1440,7 @@ export function validateStageSemantics(state: WorkflowState, stage: any, input: 
     // strategic advice is not misclassified as intent expansion.
     const capabilityTerms = [
       "计数", "统计", "排行", "区间查询", "支付", "个性化推荐", "智能推荐",
-      "店铺推荐", "内容推荐", "推荐分析", "推荐系统", "导出", "审批", "核销",
+      "内容推荐", "推荐分析", "推荐系统", "导出", "审批", "核销",
     ]
     const expanded = capabilityTerms.filter((term) => !original.includes(term)
       && hasUnauthorizedCapabilityOccurrence(businessText, term, authorizedContext))
@@ -1540,7 +1494,7 @@ function hasUnauthorizedCapabilityOccurrence(text: string, term: string, authori
 
 function isAuthorizedDerivedCapability(term: string, text: string, offset: number, authorizedContext: string): boolean {
   if (term !== "计数") return false
-  // Counting is a distinct capability in e.g. "按日浏览计数", but it is an
+  // Counting can be a distinct capability, but it is also an
   // unavoidable state measure of an already authorized capacity/quota rule.
   // Authorization must come from the original request or an approved human
   // milestone, never from the candidate text itself.
@@ -1564,21 +1518,6 @@ function hasStrategicTechnicalOccurrence(text: string, term: string): boolean {
     offset = text.indexOf(term, offset + term.length)
   }
   return false
-}
-
-const BUSINESS_RULE_FAMILIES = [
-  { family: "authorization", label: "权限/未登录处理", pattern: /未登录[^。；\n]{0,30}(?:拒绝|忽略|记录|允许|提示)|仅(?:登录|已登录)用户/u },
-  { family: "repeat", label: "重复/去重规则", pattern: /(?:重复|同日同店|同一店铺)[^。；\n]{0,40}(?:幂等|去重|仅记录|保留首次|允许多次)/u },
-  { family: "retention", label: "保留周期", pattern: /(?:轨迹|记录|数据)[^。；\n]{0,30}(?:永久保留|仅保留|保留\d+|TTL|自动过期)/iu },
-  { family: "compensation", label: "撤销/补偿规则", pattern: /(?:误签到|误记录|补偿|撤销)[^。；\n]{0,35}(?:支持|不支持|申请|允许|删除|恢复)/u },
-  { family: "time-boundary", label: "自然日边界", pattern: /(?:自然日|一日)[^。；\n]{0,35}(?:00:00|23:59|系统时区|用户时区|服务器时间)/u },
-  { family: "invalid-reference", label: "对象不存在处理", pattern: /(?:店铺|用户|对象|ID)[^。；\n]{0,25}(?:不存在|无效)[^。；\n]{0,20}(?:拒绝|报错|提示|忽略)/u },
-]
-
-function deferredRuleFamilies(document: string): string[] {
-  const deferredText = document.split(/\r?\n/u)
-    .filter((line) => /(?:待战术事件风暴|未来候选|后续阶段定义)/u.test(line)).join("\n")
-  return BUSINESS_RULE_FAMILIES.filter((rule) => rule.pattern.test(deferredText)).map((rule) => rule.family)
 }
 
 export async function review(input: ReviewInput): Promise<Transition & { reviewRecord: any }> {

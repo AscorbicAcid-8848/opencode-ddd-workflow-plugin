@@ -253,7 +253,7 @@ const DDD_AGENT_ID = "ddd-workflow";
 const DDD_CODE_AGENT_ID = "ddd-coding";
 const DDD_COMMAND_TEMPLATE = [
     "Load `ddd-orchestrate` and treat the text below as the immutable original request.",
-    "Use only `ddd_lifecycle`. Every input/sections/observations value must be a native object or array, never a JSON string. For an existing-system evidence stage call action=evidence-bundle once after prepare with 2-6 likely source identifiers; prefer short symbols such as Shop/User/Controller over invented compound class names. Do not use repository or shell exploration. For every stage call action=complete-stage once with every allowed heading. Continue until human review, a real block, archive, or completion.",
+    "Use only `ddd_lifecycle`. Every input/sections/observations value must be a native object or array, never a JSON string. For an existing-system evidence stage call action=evidence-bundle once after prepare with 2-6 likely source identifiers; prefer short symbols copied from the original request or signed repository evidence over invented compound class names. Do not use repository or shell exploration. For every stage call action=complete-stage once with every allowed heading. Continue until human review, a real block, archive, or completion.",
     "complete-stage owns claim bookkeeping and atomic publication. Submit the full stage once. If it returns draft.saved=true, obey draft.repairContract: repair only editablePaths; when replaceObservations=true resend one complete observations array; a decisionItems[n] repair resends only that stable id and the runtime preserves siblings. If draft.retryableByModel=false, stop. At milestone V submit one structured openspec-plan, then complete-stage with empty input; the runtime compiles all OpenSpec and milestone-V Markdown.",
     "Keep total section text between qualityContract.minTotalChars and targetMaxTotalChars. Omit observations when stageCard has no claimContract. Do not narrate plans between tool calls. Treat the evidence bundle as complete; record anything outside it as evidence-gap/open-question. At a human gate output transition.message and stop.",
     "",
@@ -487,7 +487,7 @@ const lifecycleTool = tool({
                 if (!i?.plan || typeof i.plan !== "object" || Array.isArray(i.plan))
                     return out({
                         error: "openspec-plan 需要顶层 plan 对象；不要放入 input 字符串。运行时会编译 proposal/specs/design/tasks/roadmap。",
-                        requiredPlanFields: ["title", "objective", "nonGoals", "designDecisions", "capabilities[].requirements[].scenarios[]", "slices[]"],
+                        requiredPlanFields: ["title", "objective", "nonGoals", "designDecisions", "capabilities[].delta", "capabilities[].requirements[].scenarios[]", "slices[].behaviorProtection", "slices[].rollback"],
                         exampleShape: { action: "openspec-plan", plan: { title: "...", objective: "...", nonGoals: [], designDecisions: [], capabilities: [], slices: [] } },
                     });
                 const draftFile = path.join(root, ".ddd", "workbench", "openspec-plan.draft.json");
@@ -496,7 +496,7 @@ const lifecycleTool = tool({
                 const plan = normalizeStructuredPlan(i.plan, currentDraft);
                 await writeJson(draftFile, plan);
                 const findings = [
-                    ...validateStructuredPlan(plan),
+                    ...validateStructuredPlan(plan, { workflowType: id.workflowType, skipSpecs: i.skipSpecs === true }),
                     ...await validatePlanAgainstApprovedDesign(id.projectRoot, root, workflowProfile, currentState, plan),
                 ];
                 if (findings.length)
@@ -504,7 +504,7 @@ const lifecycleTool = tool({
                         status: "invalid", findings, draftSaved: true, retryableByModel: true,
                         nextAction: "用 mode=repair 只提交 findings 涉及的 capability 或 slice；运行时保留其余草稿字段。",
                     });
-                const compiled = compileStructuredPlan(plan, id.workflowId);
+                const compiled = compileStructuredPlan(plan, id.workflowId, { workflowType: id.workflowType, skipSpecs: i.skipSpecs === true });
                 const contractFile = path.join(id.projectRoot, "openspec", "changes", id.workflowId, "ddd", "model-contract.json");
                 let design = compiled.design;
                 if (await exists(contractFile)) {

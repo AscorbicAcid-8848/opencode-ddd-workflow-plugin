@@ -11,7 +11,7 @@ description: Turn approved strategic and tactical design into independently valu
 - **Walking skeleton**: an initial end-to-end slice proving architecture and integration with minimal but real behavior.
 - **Acceptance binding**: explicit mapping from a slice to approved scenarios, model elements, invariants, tests, paths, and verification.
 
-Build slices by business outcome, not controller/service/repository layers. Each slice needs stable ID, dependency, consumer, acceptance criteria, owned model/invariants, expected production and test paths, verification commands, compatibility/migration action, Git boundary, and rollback.
+Build slices by business outcome, not controller/service/repository layers. Each slice needs stable ID, dependency, consumer, acceptance criteria, owned model/invariants, expected production and test paths, verification commands, compatibility/migration action, a typed behavior-protection contract for refactors, Git boundary, and a rollback contract with trigger, ordered steps, and recovery verification.
 
 Reject layer-only batches, disconnected endpoints, TODO bodies, mock-only completion, empty ports, and “wire later”. The plan may choose a walking skeleton first but must not reduce the approved domain model to a CRUD shortcut.
 
