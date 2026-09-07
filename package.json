@@ -11,6 +11,8 @@
     "ddd-workflow-mcp": "./dist/mcp-server.js"
   },
   "files": [
+    "scripts/install-opencode.mjs",
+    "opencode/commands/*.md",
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "resources/**/*.json",
@@ -19,6 +21,7 @@
     "docs/DDD-Workflow-Control-Panel.md"
   ],
   "scripts": {
+    "install:opencode": "node scripts/install-opencode.mjs",
     "build": "tsc -p tsconfig.json",
     "install:mobile": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-mobile.ps1",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -30,6 +33,7 @@
     "@fission-ai/openspec": "1.7.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@opencode-ai/plugin": "1.18.18",
+    "jsonc-parser": "3.3.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -47,10 +51,18 @@
     "solid-js": ">=1.9.12"
   },
   "peerDependenciesMeta": {
-    "@opentui/core": { "optional": true },
-    "@opentui/keymap": { "optional": true },
-    "@opentui/solid": { "optional": true },
-    "solid-js": { "optional": true }
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/keymap": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=20.19.0"

@@ -65,7 +65,24 @@ OpenSpec `tasks.md` 从所属 change 读取。损坏记录、重复 ID、归档�
 
 不支持 TUI 插件加载的 Mobile Coder 版本不会因为安装服务端插件就自动出现面板；这需要宿主本身提供对应 SDK 能力。面板不修改宿主源码，也不通过 MCP 或 LLM Slash 模板模拟原生界面。
 
-## 开发与验证
+## OpenCode 完整安装
+
+在插件源码目录执行：
+
+```powershell
+npm ci
+npm run build
+npm run install:opencode -- --check
+npm run install:opencode
+```
+
+安装命令同时配置服务端原生工具入口、TUI 插件、17 个专业 Skill，以及 `/ddd`、`/ddd-code`、`/ddd-status`。`/ddd-workflow` 由原生 TUI 注册，不生成让模型执行的同名 Markdown 命令。默认安装到 `$XDG_CONFIG_HOME/opencode`，未设置时为 `~/.config/opencode`；可用 `--config-root <目录>` 指定隔离配置。
+
+安装保留其他插件、设置和 JSONC 注释；覆盖前保存到配置目录的 `.ddd-install-backups/<时间戳>/`，失败时回滚已写文件，重复执行不重复注册。`--check` 只显示待更新文件，不落盘。若同名 JSON 和 JSONC 同时存在，则停止并要求先明确配置来源。
+
+这是本地路径安装，不复制整个运行时；必须保留插件目录和 npm 依赖。OpenSpec CLI 随插件依赖提供。完成后退出并重新启动 OpenCode，输入 `/ddd-workflow` 打开控制面板。已在 OpenCode 1.18.18 验证；其他宿主是否支持原生 TUI 取决于其 SDK。
+
+## 开发与验证命令
 
 ```text
 src/tui.ts                      原生命令、路由、渲染和对话框
@@ -78,3 +95,5 @@ tests/tui-render.bun.mjs         真实 OpenTUI 渲染器与交互冒烟测试
 ```
 
 运行 `npm test` 检查构建与回归，运行 `npm run test:tui` 检查原生渲染和键盘交互。后者使用真实 OpenTUI 渲染器，但 SDK 宿主对象为测试替身，不等同于真实 Mobile Coder 全生命周期验收。
+
+已补充 OpenCode 1.18.18 的真实终端实测，覆盖命令、页面、筛选、里程碑阅读、事件图和测试副本上的修改反馈，详见[真实宿主测试记录](reports/2026-09-07-opencode-dashboard-live.md)。命令注册必须使用当前宿主 keymap 的 `namespace: "palette"`、`slashName` 字段，不能与普通命令适配器的 `slash` 字段混用。

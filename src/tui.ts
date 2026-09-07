@@ -1,5 +1,5 @@
 import { BoxRenderable, TextRenderable, ScrollBoxRenderable } from "@opentui/core"
-import { createComponent, onCleanup } from "solid-js"
+import { createComponent, onCleanup, untrack } from "solid-js"
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { discoverWorkflows, filterWorkflows, loadMilestone, historicalMilestone, milestoneStatus, romans, typeLabels, type WorkflowItem, type MilestoneView } from "./dashboard/model.js"
 import { visualCards, decisionText, clean } from "./dashboard/views.js"
@@ -57,7 +57,7 @@ export function createDashboard(api: TuiPluginApi, project: string, leave: () =>
   }
   function choose(title: string, options: Array<{ title: string; value: string }>, onSelect: (value: string) => void) {
     api.ui.dialog.replace(() => createComponent(api.ui.DialogSelect<string>, { title, options, onSelect: option => {
-      api.ui.dialog.clear(); onSelect(option.value); root.focus()
+      api.ui.dialog.clear(); onSelect(option.value); if (!api.ui.dialog.open) root.focus()
     } }))
   }
   function search() {
@@ -82,11 +82,12 @@ export function createDashboard(api: TuiPluginApi, project: string, leave: () =>
   }
   function redraw() {
     if (disposed) return
-    header.content = `DDD Workflow · ${project}\n${items.length} 个流程 · 待审核 ${items.filter(i => i.status === "待审核").length} · 阻塞 ${items.filter(i => i.status === "阻塞" || i.status === "一致性异常").length} · 已完成 ${items.filter(i => i.status === "已完成").length}`
+    header.content = `DDD Workflow · ${items.length} 个流程 · 待审核 ${items.filter(i => i.status === "待审核").length} · 阻塞 ${items.filter(i => i.status === "阻塞" || i.status === "一致性异常").length} · 已完成 ${items.filter(i => i.status === "已完成").length}\n${project}`
     clear(filters)
     button(filters, `状态: ${pref.status}`, filterStatus)
     button(filters, `类型: ${pref.type}`, filterType)
-    button(filters, pref.query ? `搜索: ${pref.query}` : "搜索", search)
+    const queryLabel = Array.from(pref.query).slice(0, 10).join("") + (Array.from(pref.query).length > 10 ? "…" : "")
+    button(filters, pref.query ? `搜索: ${queryLabel}` : "搜索", search)
     button(filters, "刷新", () => { void refresh(true) })
     button(filters, "返回", leave)
     const visible = filterWorkflows(items, pref.query, pref.status, pref.type)
@@ -219,8 +220,16 @@ export function createDashboard(api: TuiPluginApi, project: string, leave: () =>
     if (handled) { event.preventDefault(); event.stopPropagation() }
   }
   const unsubscribe = api.event.on("file.watcher.updated", () => { void refresh(true) })
+  // The host handles Tab before Renderable.onKeyDown; claim navigation only while
+  // this page has focus, leaving dialogs and the original session's bindings intact.
+  const unregisterKeys = api.keymap.registerLayer({ target: root, targetMode: "focus-within", priority: 100,
+    bindings: ["up", "down", "left", "right", "tab", "pagedown", "pageup", "r", "/", "f", "t", "a", "e", "x", "escape"].map(key => ({ key,
+      cmd: () => {
+        if (api.ui.dialog.open || busy) return false
+        root.onKeyDown?.({ name: key, preventDefault() {}, stopPropagation() {} } as any)
+      } })) })
   const timer = setInterval(() => { void refresh() }, 2000)
-  const dispose = () => { if (disposed) return; disposed = true; generation++; clearInterval(timer); unsubscribe() }
+  const dispose = () => { if (disposed) return; disposed = true; generation++; clearInterval(timer); unsubscribe(); unregisterKeys() }
   root.once("destroyed", dispose)
   root.focus()
   void refresh(true)
@@ -235,13 +244,13 @@ export const tui: TuiPlugin = async (api) => {
   let panel: ReturnType<typeof createDashboard> | undefined
   const unregisterRoute = api.route.register([{ name: ROUTE, render: () => {
     panel?.dispose()
-    const instance = createDashboard(api, api.state.path.directory, () => api.route.navigate(previous.name, "params" in previous ? previous.params : undefined))
+    const instance = untrack(() => createDashboard(api, api.state.path.directory, () => api.route.navigate(previous.name, "params" in previous ? previous.params : undefined)))
     panel = instance
     onCleanup(instance.dispose)
     return instance.root as any
   } }])
-  const unregisterCommand = api.keymap.registerLayer({ commands: [{ name: "ddd.workflow.panel", title: "DDD Workflow 控制面板", description: "查看当前项目的流程与六个人工里程碑", category: "DDD",
-    slash: { name: ROUTE }, run: () => { if (api.route.current.name !== ROUTE) previous = api.route.current; api.route.navigate(ROUTE) } }] })
+  const unregisterCommand = api.keymap.registerLayer({ commands: [{ name: "ddd.workflow.panel", title: "DDD Workflow 控制面板", desc: "查看当前项目的流程与六个人工里程碑", category: "DDD",
+    namespace: "palette", slashName: ROUTE, run: () => { if (api.route.current.name !== ROUTE) previous = api.route.current; api.ui.dialog.clear(); api.route.navigate(ROUTE) } }] })
   api.lifecycle.onDispose(() => { panel?.dispose(); unregisterCommand(); unregisterRoute() })
 }
 
