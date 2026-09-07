@@ -1,6 +1,7 @@
 import path from "node:path";
 import { exists, readJson, writeJson } from "./fs.js";
 import { WorkflowError } from "./types.js";
+import { prepareDashboardProjections } from "./dashboard/projections.js";
 export const internalRoot = (root) => path.join(root, ".ddd");
 export const statePath = (root) => path.join(internalRoot(root), "workflow-state.json");
 export const activeChange = (projectRoot, id) => path.join(projectRoot, "openspec", "changes", id);
@@ -42,6 +43,7 @@ export async function loadState(root) {
     return state;
 }
 export async function saveState(root, state) {
+    await prepareDashboardProjections(root, state);
     state.updatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "+00:00");
     await writeJson(statePath(root), state);
 }

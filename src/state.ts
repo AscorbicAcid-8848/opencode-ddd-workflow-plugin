@@ -2,6 +2,7 @@ import path from "node:path"
 import { exists, readJson, writeJson } from "./fs.js"
 import type { WorkflowState } from "./types.js"
 import { WorkflowError } from "./types.js"
+import { prepareDashboardProjections } from "./dashboard/projections.js"
 
 export const internalRoot = (root: string) => path.join(root, ".ddd")
 export const statePath = (root: string) => path.join(internalRoot(root), "workflow-state.json")
@@ -37,6 +38,7 @@ export async function loadState(root: string): Promise<WorkflowState> {
 }
 
 export async function saveState(root: string, state: WorkflowState): Promise<void> {
+  await prepareDashboardProjections(root, state)
   state.updatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "+00:00")
   await writeJson(statePath(root), state)
 }
