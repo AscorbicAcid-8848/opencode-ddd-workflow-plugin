@@ -1,3 +1,4 @@
+import { loadStageSkills } from "./stage-skills.js";
 import { workflowTransition } from "./transition.js";
 import type { Identity, WorkflowState, Transition, ReviewDecision, OpenSpecArtifact, ValidationFinding, HumanDecisionResolution, DecisionItem } from "./types.js";
 export { queryPseudoEvents } from "./domain-semantics.js";
@@ -20,6 +21,8 @@ export interface SubmitInput extends Identity {
     finalize?: boolean;
     /** A lifecycle observations payload is a complete claim set, not a patch. */
     replaceClaims?: boolean;
+    /** Internal provenance: sections were compiled deterministically by the runtime. */
+    runtimeCompiled?: boolean;
 }
 export interface ReviewInput extends Identity {
     stage: string;
@@ -51,6 +54,7 @@ export declare function validateHumanDecisionContract(state: WorkflowState, stag
 export declare function validateExternalPartyEvidence(state: WorkflowState, stage: any, sections: Record<string, string>): ValidationFinding[];
 export declare function initialize(input: InitInput): Promise<Transition & {
     workflowId: string;
+    professionalSkills: Awaited<ReturnType<typeof loadStageSkills>>;
 }>;
 export declare function prepare(input: PrepareInput): Promise<Transition & {
     stageCard: any;

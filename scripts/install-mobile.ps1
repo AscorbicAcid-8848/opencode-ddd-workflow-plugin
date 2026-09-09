@@ -26,6 +26,7 @@ foreach ($sourceSkill in Get-ChildItem -LiteralPath (Join-Path $pluginRoot "skil
 
 Copy-Item -LiteralPath (Join-Path $pluginRoot "opencode\commands\ddd.md") -Destination (Join-Path $mobileRoot "commands\ddd.md") -Force
 Copy-Item -LiteralPath (Join-Path $pluginRoot "opencode\commands\ddd-code.md") -Destination (Join-Path $mobileRoot "commands\ddd-code.md") -Force
+Copy-Item -LiteralPath (Join-Path $pluginRoot "opencode\commands\ddd-status.md") -Destination (Join-Path $mobileRoot "commands\ddd-status.md") -Force
 
 $adapter = Join-Path $mobileRoot "plugins\ddd-workflow.js"
 $entryUrl = ([System.Uri](Join-Path $pluginRoot "dist\index.js")).AbsoluteUri
@@ -38,13 +39,19 @@ export default (input) => DddWorkflowPlugin(input, { host: "mobile" })
 $configPath = Join-Path $mobileRoot "mobile-coder.json"
 if (Test-Path -LiteralPath $configPath -PathType Leaf) {
   $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+  if ($config.PSObject.Properties["plugin"]) {
+    $retainedPlugins = @($config.plugin | Where-Object {
+      $_ -notmatch '[\\/]local-plugins[\\/]opencode-ddd-plugin-v2[\\/]'
+    })
+    $config.plugin = $retainedPlugins
+  }
   if ($config.PSObject.Properties["mcp"] -and $config.mcp.PSObject.Properties["ddd"]) {
     $managedCommand = @($config.mcp.ddd.command) -join " "
     if ($managedCommand -like "*opencode-ddd-plugin-v2*dist*mcp-server.js*") {
       $config.mcp.PSObject.Properties.Remove("ddd")
-      [System.IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 100), [System.Text.UTF8Encoding]::new($false))
     }
   }
+  [System.IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 100), [System.Text.UTF8Encoding]::new($false))
 }
 
 $legacyTool = Join-Path $mobileRoot "tools\mcp.js"

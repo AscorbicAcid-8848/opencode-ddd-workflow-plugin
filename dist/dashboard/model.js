@@ -68,21 +68,29 @@ export async function readWorkflow(project, root, archived) {
         result.status = result.issues.length ? "一致性异常" : state.status === "complete" ? "已完成"
             : state.status === "rejected" ? "已拒绝" : state.status === "runtime_blocked" ? "阻塞"
                 : state.status === "revision_requested" ? "要求修改" : state.status === "awaiting_archive" ? "待归档"
-                    : transition.humanReviewRequired ? "待审核" : "进行中";
+                    : transition.humanReviewRequired ? "待审核" : awaitingExecution(result) ? "待执行" : "进行中";
     }
     catch (error) {
         result.issues.push(String(error));
     }
     return result;
 }
+/** Read-only scheduling projection, not a claim that an LLM is currently running. */
+export function awaitingExecution(item) {
+    return !item.archived && item.state?.status === "active" && !item.state.preparedStage
+        && !item.transition?.humanReviewRequired && item.transition?.requiredAction === "continue"
+        && !!item.transition.nextStage && item.state.checkpoints.filter(c => c.status !== "superseded").at(-1)?.status === "approved";
+}
 export function milestoneCheckpoint(item, roman) {
     return item.state?.checkpoints.filter(c => c.milestone === roman && c.status !== "superseded"
         && !(item.legacy && c.reviewStatus === "not_required")).at(-1);
 }
 export function milestoneStatus(item, roman) {
+    if (awaitingExecution(item) && item.profile?.stages.find(s => s.id === item.transition?.nextStage)?.document === `milestone${roman}`)
+        return "待执行";
     const c = milestoneCheckpoint(item, roman);
     if (!c)
-        return "未开始";
+        return item.profile?.stages.find(s => s.id === item.state?.currentStage)?.document === `milestone${roman}` ? "形成中" : "未开始";
     return ({ approved: "已批准", awaiting_review: "待审核", revision_requested: "要求修改", rejected: "已拒绝", superseded: "已替代", completed: "形成中" })[c.status] ?? "未知";
 }
 export async function discoverWorkflows(project) {
@@ -122,7 +130,7 @@ export async function discoverWorkflows(project) {
             item.status = "一致性异常";
         }
     }
-    const order = ["待审核", "阻塞", "一致性异常", "要求修改", "进行中", "待归档", "已拒绝", "已完成"];
+    const order = ["待审核", "待执行", "阻塞", "一致性异常", "要求修改", "进行中", "待归档", "已拒绝", "已完成"];
     return items.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || b.updatedAt.localeCompare(a.updatedAt));
 }
 export function filterWorkflows(items, query = "", status = "全部", type = "全部") {
@@ -144,7 +152,12 @@ export async function loadMilestone(item, index) {
             view.sections = documentSections(view.body);
         }
         catch (error) {
-            view.issues.push(`正式文档不可读取：${String(error)}`);
+            const published = item.archived || view.history.some(c => ["awaiting_review", "approved", "revision_requested", "rejected"].includes(c.status))
+                || (item.state.dashboard?.revisions.some(r => r.roman === roman) ?? false);
+            if (error.code === "ENOENT" && !published)
+                view.status = "形成中";
+            else
+                view.issues.push(`正式文档不可读取：${String(error)}`);
         }
     }
     view.token = createHash("sha256").update(await safeRead(item.root, ".ddd/workflow-state.json")).update(view.body).digest("hex");

@@ -35,6 +35,7 @@ const conventionFiles = [
 ]
 const conventionPattern = /(?:必须|不得|禁止|应当|需要保持|现有行为|兼容|持久化|存储|身份|认证|测试|\bmust\b|\bmust not\b|\brequired\b|\bshall\b|compatib|persist|storage|auth|test)/iu
 const mandatoryPattern = /(?:必须|不得|禁止|应当|需要保持|现有行为[^。\n]{0,20}保持|\bmust\b|\bmust not\b|\brequired\b|\bshall\b)/iu
+const advisoryConventionPattern = /(?:regardless\s+of|to\s+demonstrate|for\s+any\s+business\s+application|best\s+practice|recommended|示例|演示|最佳实践|建议)/iu
 
 export interface EvidenceBundleOptions {
   /** Test seam and safety budget; production default is 2,000 source files. */
@@ -130,7 +131,12 @@ async function projectConventionEvidence(root: string): Promise<Array<{ file: st
     result.push({ file, excerpts: fallback.map(({ text: lineText, index }) => ({
       ref: `code:${file}#L${index + 1}-L${index + 1}`,
       text: `L${index + 1}: ${lineText}`,
-      mandatory: mandatoryPattern.test(lineText),
+      // README prose often contains normative words while merely explaining a
+      // sample or a general best practice (for example, “tests are a must for
+      // any business application ... to demonstrate JUnit”).  Such prose is
+      // useful discovery context but is not a preservation contract that may
+      // block every later DDD stage.
+      mandatory: mandatoryPattern.test(lineText) && !advisoryConventionPattern.test(lineText),
     })) })
   }
   return result

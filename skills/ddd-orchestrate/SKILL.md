@@ -35,7 +35,7 @@ Repeat only while `requiredAction` is `continue` or `select-next-stage`:
 {"action":"prepare","input":{"stage":"<nextStage>"}}
 ```
 
-2. Respect `stageCard.stageBoundary`, answer its checklist, use only its listed professional skills, and write only `allowedSectionHeadings`. Keep all section text between `qualityContract.minTotalChars` and `targetMaxTotalChars`. The immutable scope is `intentContract.originalRequest`. Do not make decisions owned by later stages.
+2. Respect `stageCard.stageBoundary`, answer its checklist and `phaseRequiredOutcomes`, use only its listed professional skills, and write only `allowedSectionHeadings`. Length targets and keyword checks are advisory, not quotas; use enough detail to explain the business and tradeoffs without padding. Equivalent wording, prose, tables and diagrams are allowed. Explain business reasons when an outcome is inapplicable; do not invent a model to fill a template. The immutable scope is `intentContract.originalRequest`. Do not make decisions owned by later stages.
 
 For `system-discovery`, treat `baselineClaims` as the only AS-IS authority. In the `能力状态分类` subsection, every line labeled `现状已存在` cites its exact claim id. Do not transfer an existing query/interface outcome into a new target command, and describe boundaries only as candidate clues.
 
@@ -47,7 +47,7 @@ For `system-discovery`, treat `baselineClaims` as the only AS-IS authority. In t
 
 Use no repository/shell exploration in this stage. Copy `excerpt.ref` exactly into `evidence_refs`; cover `requiredCoverage`; packet-external knowledge is an `evidence-gap` or `open-question`, never a proposed table/model/API. Stay within `responseBudget`.
 
-4. Submit every allowed section in one valid JSON call. Values may use `###` subsections; the runtime also normalizes accidental nested `##` headings. At a modeling human gate, submit `decisionItems` for open, deferred, and out-of-scope decisions. Every block is `{id, statement, documentSection}`: `statement` is the exact conclusion that may enter that authoritative section only after approval, so before review it belongs only in the runtime review area or alternatives. If authoritative prose mentions an open or deferred issue, keep one issue per line and cite both `DEC-ID/BLOCK-ID` on that line. An option that defers or excludes work must declare `resultStatus: "deferred" | "out-of-scope"`; a deferred option also declares `deferredToStage`.
+4. Submit every allowed section in one valid JSON call. Values may use `###` subsections; the runtime also normalizes accidental nested `##` headings. This transaction writes only the machine-facing `ddd/.ddd/stages/<stageId>.md`; never compose or repair a Roman milestone document. When `stageCard` contains `humanDecisionContract`, submit `decisionItems` for open, deferred, and out-of-scope decisions. Every block is `{id, statement, documentSection}`: `statement` is the exact conclusion that may enter that authoritative section only after approval, so before review it belongs only in alternatives. If authoritative prose mentions an open or deferred issue, keep one issue per line and cite both `DEC-ID/BLOCK-ID` on that line. An option that defers or excludes work must declare `resultStatus: "deferred" | "out-of-scope"`; a deferred option also declares `deferredToStage`.
 
 ```json
 {"action":"complete-stage","input":{"stage":"<stageId>","summary":"至少20字的阶段结论","sections":{"<allowed heading>":"完整正文"},"observations":[{"heading":"<heading>","kind":"<allowed kind>","statement":"正文中的原句","evidence_refs":["code:relative/path#L1-L3"]}]}}
@@ -67,6 +67,10 @@ The runtime compiles proposal, Delta Specs, design, tasks, `plan.json`, and `roa
 
 ## Human gate and completion
 
+After the last Arabic business stage of each milestone succeeds, the runtime automatically executes a separate summary transaction. It reads all independent stage artifacts, generates the fixed Roman-numbered document, aggregates pending decisions, and creates the only human-review checkpoint. The model must not call or author this summary stage.
+
+Write Arabic-stage content for reuse by a non-DDD business reviewer: lead each section with a concrete project conclusion, explain it through scenarios, then give reasons and alternatives. Explain unfamiliar terms using this project's business, not textbook definitions. Distinguish observed facts, proposed choices and unknowns; preserve evidence and decision IDs. Summaries report business findings, not tool activity or document counts. The runtime organizes Roman documents into conclusions, scope/evidence, stage analysis, decisions and supporting references. This presentation does not merge phase scopes or authorize later-stage design; VI reports actual evidence, V only the delivery plan.
+
 When `requiredAction` is `await-human-review`, output `transition.message` verbatim and stop. On the next user turn record the decision:
 
 ```json
@@ -85,7 +89,7 @@ If real build, test, E2E, database, cache, Git, or runtime evidence is unavailab
 
 - Order is scenarios → Big Picture EventStorming → strategic design → implementation-unit use cases → Design-Level EventStorming → tactical design → delivery plan → implementation → acceptance.
 - Big Picture does not decide API, aggregate, table, or middleware. Tactical design owns application services, aggregates, domain interactions, and persistence.
-- Roman I–VI are human labels; tool calls use exact stage IDs.
+- Arabic stage IDs own independent machine artifacts under `ddd/.ddd/stages/*.md`. Roman I–VI documents at the `ddd/` root are runtime-owned summaries and are the only human review documents.
 - One stage transaction is one `prepare`, optional required packet/planning call, then one `complete-stage`.
 - A Coding `sliceId` must exist in the approved roadmap and all its dependencies must already be complete.
 - Never hand-edit formal milestone/OpenSpec artifacts or workflow state.

@@ -17,11 +17,21 @@ Treat code and data as evidence of current behavior, not automatically as the in
 ## Method
 
 1. Start from the requested user scenario and choose 2–6 stable code-search terms for the runtime `evidence-bundle`.
-2. Consume that single bundle as the complete bounded view of the relevant path through behavior, state, integrations, tests and OpenSpec history. Do not issue repository or shell calls after it.
+2. Consume that single bundle as the available bounded view, not proof that the business journey is fully covered. Do not issue repository or shell calls after it. Runtime limits remain authoritative.
 3. Separate facts, hypotheses, and gaps. Never turn a type, empty stub, or table name into runtime proof.
 4. Record current success and failure behavior as executable Given/When/Then constraints.
 5. Inspect relevant current OpenSpec specs and historical DDD decisions; state explicitly when none exist.
 6. Stop at the evidence budget. Unknowns remain gaps rather than triggering a repository sweep.
+
+## Recover behavior along the proposed journey
+
+Choose search terms from the candidate pilot and its collaborating responsibilities, not only the application's most prominent entity. Trace the available evidence from entry/trigger through rule, state change and observable result, including tested rejection paths. Separate code-supported behavior, contract declarations and tests actually executed; a test's existence or a success status assertion does not prove complete behavior coverage.
+
+Within the existing baseline sections, assess coverage for the scenario's trigger, main result, material alternatives, ownership/dependencies and compatibility. Preserve all relevant available facts in the typed claims consumed downstream; prose-only evidence must not disappear simply because its claim was omitted. A claim should express the evidenced behavior, not a stronger interpretation of a framework class or schema.
+
+When a recommended pilot is less evidenced than another capability, say so explicitly. For each material gap, state the missing behavior, affected decision, bounded source/terms that could resolve it, and latest safe resolution stage. Selection-critical gaps must precede approval of the affected pilot/boundary; implementation-only details may wait until their owning implementation step. Carry the same distinction into downstream handoff. Do not describe the baseline as complete, substitute a better-evidenced but unrelated capability, or defer a decision-critical unknown to coding merely to keep the workflow moving.
+
+Unavailable evidence may be reported within the runtime budget; it must not turn into an unsupported positive recommendation. These instructions do not permit additional tool calls beyond the runtime contract or require every project to have compensation, messaging or complex exceptions.
 
 ## Submission contract
 

@@ -47,6 +47,12 @@ export interface StageContract {
     skills?: string[];
     checklist?: string[];
     humanGate?: boolean;
+    /** The stage may declare decisions, but only the milestone summary is reviewed. */
+    decisionGate?: boolean;
+    /** Runtime-owned stage that compiles stage artifacts into one Roman milestone document. */
+    summaryStage?: boolean;
+    /** Ordered business stages whose independent artifacts feed this summary. */
+    summarizesStages?: string[];
     criticalGate?: string;
     adviceRequired?: boolean;
     reviewTitle?: string;
@@ -105,6 +111,8 @@ export interface Checkpoint {
     reviewChecklist: string[];
     adviceRequired: boolean;
     document: string;
+    /** Independent Arabic-stage artifact, or the Roman document for a summary checkpoint. */
+    artifactPath?: string;
     completedAt: string;
     plannedSlices?: number;
     completedSlices?: number;
@@ -127,9 +135,15 @@ export interface WorkflowState {
     createdAt: string;
     updatedAt: string;
     runtimeSessionId?: string;
+    runtimeSessionIds?: string[];
     preparedStage?: {
         stage: string;
         preparedAt: string;
+        loadedSkills?: Array<{
+            name: string;
+            source: string;
+            sha256: string;
+        }>;
     };
     checkpoints: Checkpoint[];
     openSpec?: {
@@ -173,7 +187,7 @@ export interface Transition {
     milestoneTitle: string | null;
     milestoneReady: boolean;
     milestoneStatus: string;
-    documentRole: "cumulative-working-document" | "human-review-document" | "none";
+    documentRole: "stage-artifact" | "human-review-document" | "none";
     humanReviewRequired: boolean;
     mustContinue: boolean;
     stopAllowed: boolean;

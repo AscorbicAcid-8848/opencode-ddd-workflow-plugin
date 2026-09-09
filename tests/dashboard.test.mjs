@@ -27,6 +27,48 @@ async function fixture(t, type = 'refactor-system') {
   return { project, root, state, stateFile, docFile }
 }
 
+for (const type of ['add-feature', 'refactor-system', 'create-system']) test(`approved gate exposes ready-to-run without repeating review: ${type}`, async t => {
+  const f = await fixture(t, type)
+  f.state.checkpoints[0].status = 'approved'
+  await writeFile(f.stateFile, JSON.stringify(f.state))
+  const before = await readFile(f.stateFile, 'utf8')
+  let [item] = await discoverWorkflows(f.project)
+  assert.equal(item.status, '待执行')
+  assert.equal(milestoneStatus(item, 'I'), '已批准')
+  assert.equal(milestoneStatus(item, 'II'), '待执行')
+  const view = await loadMilestone(item, 1)
+  assert.equal(view.status, '待执行')
+  assert.deepEqual(view.issues, [])
+  assert.equal(canReview(item, view), false)
+  assert.equal(filterWorkflows([item], '', '待执行').length, 1)
+  assert.equal(await readFile(f.stateFile, 'utf8'), before)
+  f.state.preparedStage = { stage: item.transition.nextStage }
+  f.state.currentStage = item.transition.nextStage
+  await writeFile(f.stateFile, JSON.stringify(f.state))
+  ;[item] = await discoverWorkflows(f.project)
+  assert.equal(item.status, '进行中')
+  assert.equal(milestoneStatus(item, 'II'), '形成中')
+})
+
+for (const type of ['add-feature', 'refactor-system', 'create-system']) test(`missing unpublished document is generating, not an error: ${type}`, async t => {
+  const f = await fixture(t, type)
+  f.state.checkpoints[0].status = 'completed'
+  await writeFile(f.stateFile, JSON.stringify(f.state))
+  await rm(f.docFile)
+  let [item] = await discoverWorkflows(f.project)
+  let view = await loadMilestone(item, 0)
+  assert.equal(view.status, '形成中')
+  assert.deepEqual(view.issues, [])
+  assert.equal(canReview(item, view), false)
+  // A published/awaiting-review document disappearing is still a real error.
+  f.state.checkpoints[0].status = 'awaiting_review'
+  await writeFile(f.stateFile, JSON.stringify(f.state))
+  ;[item] = await discoverWorkflows(f.project)
+  view = await loadMilestone(item, 0)
+  assert.ok(view.issues.some(i => i.includes('正式文档不可读取')))
+  assert.equal(canReview(item, view), false)
+})
+
 for (const type of ['add-feature', 'refactor-system', 'create-system']) test(`dashboard discovers ${type} without mutating source state`, async t => {
   const f = await fixture(t, type)
   const before = await readFile(f.stateFile, 'utf8')

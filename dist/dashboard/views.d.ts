@@ -17,4 +17,4 @@ export declare function explicitEdges(source: string): VisualEdge[];
 /** Interpret only explicit Mermaid edges. Unsupported notation remains visible as source, never inferred. */
 export declare function diagramText(source: string): string;
 export declare function visualCards(item: WorkflowItem, view: MilestoneView, index: number): VisualCard[];
-export declare function decisionText(view: MilestoneView): string;
+export declare function decisionText(view: MilestoneView, language?: "zh" | "en"): string;

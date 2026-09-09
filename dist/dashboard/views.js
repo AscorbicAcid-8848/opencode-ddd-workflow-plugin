@@ -68,8 +68,8 @@ export function visualCards(item, view, index) {
         cards.push({ title: "历史产物", body: "该里程碑缺少可识别的结构化章节，请切换到「正文」阅读原始结论。未推测业务关系。", kind: "warning" });
     return cards;
 }
-export function decisionText(view) {
+export function decisionText(view, language = "zh") {
     const items = view.checkpoint?.decisionItems ?? [];
-    return items.length ? items.map(d => `${d.id} [${d.status}] ${d.question}\n${d.options.map(o => `  ${o.id} ${o.label}${o.id === d.recommendationId ? "（推荐）" : ""}${o.id === d.selectedOptionId ? "（已选）" : ""}${o.impact ? `：${o.impact}` : ""}`).join("\n")}\n影响：${d.blocks.map(b => b.statement).join("；")}`).join("\n\n") : clean(view.sections["本次请您确认"] ?? "没有记录结构化待决事项；请阅读当前正文与验收清单。");
+    return items.length ? items.map(d => `${d.question}\n${d.options.map(o => `  ${o.label}${o.id === d.recommendationId ? (language === "en" ? " (Recommended)" : "（推荐）") : ""}${o.id === d.selectedOptionId ? (language === "en" ? " (Selected)" : "（已选）") : ""}${o.impact ? `：${o.impact}` : ""}`).join("\n")}\n${language === "en" ? "Impact: " : "影响："}${d.blocks.map(b => b.statement).join("；")}`).join("\n\n") : clean(view.sections["本次请您确认"] ?? (language === "en" ? "No structured decisions recorded. Read the document and checklist." : "没有记录结构化待决事项；请阅读当前正文与验收清单。"));
 }
 //# sourceMappingURL=views.js.map

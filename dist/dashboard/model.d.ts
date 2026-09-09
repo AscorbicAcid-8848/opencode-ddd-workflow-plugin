@@ -3,7 +3,7 @@ import type { MilestoneProjection, ProjectionRef } from "./projections.js";
 export declare const romans: readonly ["I", "II", "III", "IV", "V", "VI"];
 export declare const titles: string[];
 export declare const typeLabels: Record<string, string>;
-export type PanelStatus = "待审核" | "阻塞" | "要求修改" | "进行中" | "待归档" | "已完成" | "已拒绝" | "一致性异常";
+export type PanelStatus = "待执行" | "待审核" | "阻塞" | "要求修改" | "进行中" | "待归档" | "已完成" | "已拒绝" | "一致性异常";
 export interface WorkflowItem {
     key: string;
     root: string;
@@ -41,6 +41,8 @@ export interface MilestoneView {
 /** All reads are bounded and confined to the selected physical change; no state migration on browse. */
 export declare function safeRead(root: string, relative: string): Promise<string>;
 export declare function readWorkflow(project: string, root: string, archived: boolean): Promise<WorkflowItem>;
+/** Read-only scheduling projection, not a claim that an LLM is currently running. */
+export declare function awaitingExecution(item: WorkflowItem): boolean;
 export declare function milestoneCheckpoint(item: WorkflowItem, roman: string): Checkpoint | undefined;
 export declare function milestoneStatus(item: WorkflowItem, roman: string): string;
 export declare function discoverWorkflows(project: string): Promise<WorkflowItem[]>;

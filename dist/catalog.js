@@ -6,6 +6,49 @@ const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const references = path.join(packageRoot, "resources", "references");
 let profileCache;
 let documentCache;
+const DECISION_SCOPES = new Set(["system-discovery", "system-strategy", "context-discovery", "context-tactical-design"]);
+/**
+ * Split every former human-gate business stage into an Arabic-numbered stage
+ * with its own artifact and a runtime-owned Roman milestone summary.
+ */
+function withMilestoneSummaryStages(profile) {
+    if (profile.runtimeMilestoneSummaries !== true)
+        return profile;
+    if (profile.stages.some((stage) => stage.summaryStage))
+        return profile;
+    const original = profile.stages.map((stage) => ({ ...stage }));
+    const expanded = [];
+    for (const source of original) {
+        const wasHumanGate = Boolean(source.humanGate);
+        const scopeId = source.scopeContract?.id;
+        expanded.push({
+            ...source,
+            humanGate: false,
+            artifactTitle: stageTitles[source.id] ?? source.id,
+            ...(DECISION_SCOPES.has(scopeId ?? "") ? { decisionGate: true } : {}),
+        });
+        if (!wasHumanGate)
+            continue;
+        const milestone = profile.milestones.find((item) => item.document === source.document);
+        const roman = milestone?.roman ?? source.document;
+        expanded.push({
+            id: `milestone-${roman}-summary`,
+            document: source.document,
+            humanGate: true,
+            summaryStage: true,
+            summarizesStages: original.filter((stage) => stage.document === source.document).map((stage) => stage.id),
+            skills: [],
+            checklist: source.checklist ?? [],
+            criticalGate: source.criticalGate,
+            adviceRequired: source.adviceRequired,
+            reviewTitle: source.reviewTitle,
+            deliveryAssetGate: source.deliveryAssetGate,
+            openspecArchiveGate: source.openspecArchiveGate,
+            scopeContract: { id: "milestone-summary" },
+        });
+    }
+    return { ...profile, stages: expanded };
+}
 async function loadJson(name) {
     return JSON.parse(await readFile(path.join(references, name), "utf8"));
 }
@@ -13,7 +56,8 @@ export async function profiles() {
     if (profileCache)
         return profileCache;
     const catalog = await loadJson("workflow-profiles.json");
-    profileCache = catalog.profiles;
+    profileCache = Object.fromEntries(Object.entries(catalog.profiles)
+        .map(([key, profile]) => [key, withMilestoneSummaryStages(profile)]));
     return profileCache;
 }
 export async function documents() {
@@ -83,5 +127,11 @@ export const stageTitles = {
     "11-implementation": "系统实现增量",
     "12-final-review": "系统首期验收",
 };
-export const stageTitle = (stage) => stageTitles[stage.id] ?? stage.id;
+export const stageTitle = (stage) => {
+    if (stage.summaryStage) {
+        const roman = stage.id.match(/^milestone-(.+)-summary$/u)?.[1] ?? "?";
+        return `里程碑 ${roman} 汇总与人工验收`;
+    }
+    return stageTitles[stage.id] ?? stage.id;
+};
 //# sourceMappingURL=catalog.js.map

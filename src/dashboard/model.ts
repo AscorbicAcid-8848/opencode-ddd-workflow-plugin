@@ -10,7 +10,7 @@ import type { ProjectedState, MilestoneProjection, ProjectionRef } from "./proje
 export const romans = ["I", "II", "III", "IV", "V", "VI"] as const
 export const titles = ["战略事件风暴", "战略设计", "战术事件风暴", "战术设计", "交付计划", "最终验收"]
 export const typeLabels: Record<string, string> = { "add-feature": "新增功能", "refactor-system": "系统重构", "create-system": "新建系统" }
-export type PanelStatus = "待审核" | "阻塞" | "要求修改" | "进行中" | "待归档" | "已完成" | "已拒绝" | "一致性异常"
+export type PanelStatus = "待执行" | "待审核" | "阻塞" | "要求修改" | "进行中" | "待归档" | "已完成" | "已拒绝" | "一致性异常"
 export interface WorkflowItem {
   key: string; root: string; project: string; archived: boolean; title: string; id: string
   status: PanelStatus; updatedAt: string; issues: string[]; approved: number
@@ -70,9 +70,16 @@ export async function readWorkflow(project: string, root: string, archived: bool
     result.status = result.issues.length ? "一致性异常" : state.status === "complete" ? "已完成"
       : state.status === "rejected" ? "已拒绝" : state.status === "runtime_blocked" ? "阻塞"
       : state.status === "revision_requested" ? "要求修改" : state.status === "awaiting_archive" ? "待归档"
-      : transition.humanReviewRequired ? "待审核" : "进行中"
+      : transition.humanReviewRequired ? "待审核" : awaitingExecution(result) ? "待执行" : "进行中"
   } catch (error) { result.issues.push(String(error)) }
   return result
+}
+
+/** Read-only scheduling projection, not a claim that an LLM is currently running. */
+export function awaitingExecution(item: WorkflowItem): boolean {
+  return !item.archived && item.state?.status === "active" && !item.state.preparedStage
+    && !item.transition?.humanReviewRequired && item.transition?.requiredAction === "continue"
+    && !!item.transition.nextStage && item.state.checkpoints.filter(c => c.status !== "superseded").at(-1)?.status === "approved"
 }
 
 export function milestoneCheckpoint(item: WorkflowItem, roman: string): Checkpoint | undefined {
@@ -80,8 +87,9 @@ export function milestoneCheckpoint(item: WorkflowItem, roman: string): Checkpoi
     && !(item.legacy && (c as Checkpoint & { reviewStatus?: string }).reviewStatus === "not_required")).at(-1)
 }
 export function milestoneStatus(item: WorkflowItem, roman: string): string {
+  if (awaitingExecution(item) && item.profile?.stages.find(s => s.id === item.transition?.nextStage)?.document === `milestone${roman}`) return "待执行"
   const c = milestoneCheckpoint(item, roman)
-  if (!c) return "未开始"
+  if (!c) return item.profile?.stages.find(s => s.id === item.state?.currentStage)?.document === `milestone${roman}` ? "形成中" : "未开始"
   return ({ approved: "已批准", awaiting_review: "待审核", revision_requested: "要求修改", rejected: "已拒绝", superseded: "已替代", completed: "形成中" })[c.status] ?? "未知"
 }
 
@@ -111,7 +119,7 @@ export async function discoverWorkflows(project: string): Promise<WorkflowItem[]
       item.status = "一致性异常"
     }
   }
-  const order: PanelStatus[] = ["待审核", "阻塞", "一致性异常", "要求修改", "进行中", "待归档", "已拒绝", "已完成"]
+  const order: PanelStatus[] = ["待审核", "待执行", "阻塞", "一致性异常", "要求修改", "进行中", "待归档", "已拒绝", "已完成"]
   return items.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || b.updatedAt.localeCompare(a.updatedAt))
 }
 
@@ -130,7 +138,12 @@ export async function loadMilestone(item: WorkflowItem, index: number): Promise<
     file: path.join(item.root, name), body: "", sections: {}, token: "", issues: [] }
   if (view.checkpoint) {
     try { view.body = await safeRead(item.root, name); view.sections = documentSections(view.body) }
-    catch (error) { view.issues.push(`正式文档不可读取：${String(error)}`) }
+    catch (error) {
+      const published = item.archived || view.history.some(c => ["awaiting_review", "approved", "revision_requested", "rejected"].includes(c.status))
+        || ((item.state as ProjectedState).dashboard?.revisions.some(r => r.roman === roman) ?? false)
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" && !published) view.status = "形成中"
+      else view.issues.push(`正式文档不可读取：${String(error)}`)
+    }
   }
   view.token = createHash("sha256").update(await safeRead(item.root, ".ddd/workflow-state.json")).update(view.body).digest("hex")
   view.revisions = (item.state as ProjectedState).dashboard?.revisions.filter(r => r.roman === roman) ?? []

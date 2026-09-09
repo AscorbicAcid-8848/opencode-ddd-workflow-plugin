@@ -10,6 +10,48 @@ const references = path.join(packageRoot, "resources", "references")
 let profileCache: Record<string, WorkflowProfile> | undefined
 let documentCache: any | undefined
 
+const DECISION_SCOPES = new Set(["system-discovery", "system-strategy", "context-discovery", "context-tactical-design"])
+
+/**
+ * Split every former human-gate business stage into an Arabic-numbered stage
+ * with its own artifact and a runtime-owned Roman milestone summary.
+ */
+function withMilestoneSummaryStages(profile: WorkflowProfile): WorkflowProfile {
+  if (profile.runtimeMilestoneSummaries !== true) return profile
+  if (profile.stages.some((stage) => stage.summaryStage)) return profile
+  const original = profile.stages.map((stage) => ({ ...stage }))
+  const expanded: StageContract[] = []
+  for (const source of original) {
+    const wasHumanGate = Boolean(source.humanGate)
+    const scopeId = source.scopeContract?.id
+    expanded.push({
+      ...source,
+      humanGate: false,
+      artifactTitle: stageTitles[source.id] ?? source.id,
+      ...(DECISION_SCOPES.has(scopeId ?? "") ? { decisionGate: true } : {}),
+    })
+    if (!wasHumanGate) continue
+    const milestone = profile.milestones.find((item) => item.document === source.document)
+    const roman = milestone?.roman ?? source.document
+    expanded.push({
+      id: `milestone-${roman}-summary`,
+      document: source.document,
+      humanGate: true,
+      summaryStage: true,
+      summarizesStages: original.filter((stage) => stage.document === source.document).map((stage) => stage.id),
+      skills: [],
+      checklist: source.checklist ?? [],
+      criticalGate: source.criticalGate,
+      adviceRequired: source.adviceRequired,
+      reviewTitle: source.reviewTitle,
+      deliveryAssetGate: source.deliveryAssetGate,
+      openspecArchiveGate: source.openspecArchiveGate,
+      scopeContract: { id: "milestone-summary" },
+    })
+  }
+  return { ...profile, stages: expanded }
+}
+
 async function loadJson(name: string): Promise<any> {
   return JSON.parse(await readFile(path.join(references, name), "utf8"))
 }
@@ -17,7 +59,8 @@ async function loadJson(name: string): Promise<any> {
 export async function profiles(): Promise<Record<string, WorkflowProfile>> {
   if (profileCache) return profileCache
   const catalog = await loadJson("workflow-profiles.json")
-  profileCache = catalog.profiles as Record<string, WorkflowProfile>
+  profileCache = Object.fromEntries(Object.entries(catalog.profiles as Record<string, WorkflowProfile>)
+    .map(([key, profile]) => [key, withMilestoneSummaryStages(profile)]))
   return profileCache
 }
 
@@ -94,4 +137,10 @@ export const stageTitles: Record<string, string> = {
   "12-final-review": "系统首期验收",
 }
 
-export const stageTitle = (stage: StageContract) => stageTitles[stage.id] ?? stage.id
+export const stageTitle = (stage: StageContract) => {
+  if (stage.summaryStage) {
+    const roman = stage.id.match(/^milestone-(.+)-summary$/u)?.[1] ?? "?"
+    return `里程碑 ${roman} 汇总与人工验收`
+  }
+  return stageTitles[stage.id] ?? stage.id
+}

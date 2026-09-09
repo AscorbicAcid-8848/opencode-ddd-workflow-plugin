@@ -1,10 +1,15 @@
 import path from "node:path"
+import { phaseContentFor } from "./phase-content.js"
+import { loadStageSkills } from "./stage-skills.js"
 import { createHash } from "node:crypto"
 import { exists, readJson, writeJson, atomicText, now } from "./fs.js"
 import { profileFor, stageContract, stageIndex, milestoneFor, stageTitle } from "./catalog.js"
 import { loadState, saveState, activeChange, workflowRoot, statePath } from "./state.js"
 import { workflowTransition } from "./transition.js"
-import { candidateDocument, documentSections, publishSections, documentPath, writableHeadingsForStage, unfilledHeadings } from "./documents.js"
+import {
+  candidateStageDocument, compileMilestoneDocument, documentSections, publishSections,
+  documentPath, publishStageSections, stageArtifactPath, writableHeadingsForStage, unfilledHeadings,
+} from "./documents.js"
 import { newChange, writeLink, verifyArchive, runOpenSpec, openSpecAction, planningArtifacts } from "./openspec.js"
 import type {
   Identity, WorkflowProfile, WorkflowState, Checkpoint, Transition,
@@ -32,6 +37,8 @@ export interface SubmitInput extends Identity {
   finalize?: boolean
   /** A lifecycle observations payload is a complete claim set, not a patch. */
   replaceClaims?: boolean
+  /** Internal provenance: sections were compiled deterministically by the runtime. */
+  runtimeCompiled?: boolean
 }
 export interface ReviewInput extends Identity { stage: string; decision: ReviewDecision; reviewer: string; feedback?: string; resolution?: HumanDecisionResolution }
 export interface StatusInput extends Identity { view?: "compact" | "full" }
@@ -55,7 +62,10 @@ const DECISION_SOURCE_PREFIX = /^(?:user-input|code|schema|test|runtime|openspec
 const DECISION_NON_AUTHORITATIVE_HEADINGS = new Set([
   "本次请您确认", "备选解释与建议", "备选战略方案与建议", "证据与追踪", "业务验收记录",
 ])
-const OPEN_DECISION_LANGUAGE = /[？?]|\bTBD\b|(?:待|尚待|仍待|有待|留待|未决|未定|未明确|未解决|不确定|不明确|未知|开放|悬而未决|保留)[^。；\n]{0,48}(?:问题|事项|决策|规则|语义|行为|条件|结果|方向|范围|约束|定义|处理|确认|决定|选择|澄清|细化|回答|解决)|(?:问题|事项|决策|规则|语义|行为|条件|结果|方向|范围|约束)[^。；\n]{0,48}(?:开放|未决|未定|待(?:确认|决定|定义|处理|澄清|细化|回答|解决)|尚未(?:确认|决定|定义|处理|澄清|细化|回答|解决)|不确定|不明确|保留)|(?:仍|尚)?(?:需|需要|必须)(?:在|由)?[^。；\n]{0,42}(?:确认|决定|定义|澄清|选择|细化|回答|解决)|(?:留待|交由|后续|下一阶段|稍后|未来)[^。；\n]{0,48}(?:确认|决定|定义|澄清|选择|细化|回答|解决|问题|约束|规则|语义|行为|处理|保留)|(?:未|尚未)[^。；\n]{0,32}(?:给出|规定|明确|确定|回答|解决)|还是/u
+// This is diagnostic only. The durable source of truth for unresolved work is
+// decisionItems, not wording inferred from prose. In particular, ordinary
+// refactoring language such as “保留外部行为和结果” must never become a gate.
+const OPEN_DECISION_LANGUAGE = /[？?]|\bTBD\b|(?:尚待|仍待|有待|留待|未决|未定|未明确|未解决|不确定|不明确|未知|开放问题|悬而未决)[^。；\n]{0,48}(?:问题|事项|决策|规则|语义|行为|条件|结果|方向|范围|约束|定义|处理|确认|决定|选择|澄清|细化|回答|解决)|(?:问题|事项|决策|规则|语义|行为|条件|结果|方向|范围|约束)[^。；\n]{0,48}(?:开放|未决|未定|待(?:确认|决定|定义|处理|澄清|细化|回答|解决)|尚未(?:确认|决定|定义|处理|澄清|细化|回答|解决)|不确定|不明确|保留)|(?:仍|尚)?(?:需|需要|必须)(?:在|由)?[^。；\n]{0,42}(?:确认|决定|定义|澄清|选择|细化|回答|解决)|(?:留待|交由|后续|下一阶段|稍后|未来)[^。；\n]{0,48}(?:确认|决定|定义|澄清|选择|细化|回答|解决|问题|约束|规则|语义|行为|处理|保留)|(?:未|尚未)[^。；\n]{0,32}(?:给出|规定|明确|确定|回答|解决)|还是/u
 const OPTION_DEFERRAL_LANGUAGE = /(?:延期|推迟|稍后|留待|后续(?:阶段|里程碑|版本|处理|实现)|未来候选|范围外|不(?:纳入|包含|属于)本次)/u
 const OPEN_DECISION_NON_ASSERTIVE_LANGUAGE = /(?:候选|待确认|等待确认|尚未确认|未决定|未决|不确定|开放问题|人工批准前|不进入唯一(?:主流程|结论)|不具有权威性|由\s*DEC-[A-Za-z0-9._-]+\s*决定)/iu
 const TARGET_BUSINESS_RULE_LANGUAGE = /(?:必须|不得|只能|仅(?:能|可|限于|返回|展示|允许|包含|保留|属于)|只(?:能|允许|返回|展示|查看|包含|保留|属于)|保证|确保|禁止|拒绝|幂等|无需补偿|无须补偿|可安全重试|不(?:发生|改变|暴露|产生|创建|制造)[^。；\n]{0,36}|(?:失败|不存在|无效|失效|重复|并发|超时)[^。；\n]{0,32}(?:拒绝|返回|保持|重试|补偿|刷新|保留|不应|不得)|(?:采用|按照|按)[^。；\n]{0,24}(?:处理|返回|排序|记录)|由系统[^。；\n]{0,30}记录|可被引用|稳定可复现|稳定且可重复|\b(?:must|shall|only|reject|idempotent|retry|compensat(?:e|ion)|ensure|guarantee)\b)/iu
@@ -133,6 +143,8 @@ function legacyDecisionItems(ambiguity: any, stageId: string, sections: Record<s
   })
   const recommendationId = explicit || (mentioned.length === 1 ? mentioned[0].id : "")
   const affected = Array.isArray(ambiguity?.affectedDecisions) ? ambiguity.affectedDecisions.map(String).filter(Boolean) : []
+  const authoritativeSection = Object.keys(sections).find((heading) => !DECISION_NON_AUTHORITATIVE_HEADINGS.has(heading))
+    ?? "业务主题与分析范围"
   return [{
     id: `DEC-${stageId.toUpperCase()}`,
     ownerStage: stageId,
@@ -141,7 +153,7 @@ function legacyDecisionItems(ambiguity: any, stageId: string, sections: Record<s
     ...(recommendationId ? { recommendationId } : {}),
     status: "open",
     blocks: (affected.length ? affected : ["当前里程碑唯一结论"]).map((statement: string, index: number) => ({
-      id: `LEGACY-BLOCK-${index + 1}`, statement, documentSection: "一页结论",
+      id: `LEGACY-BLOCK-${index + 1}`, statement, documentSection: authoritativeSection,
     })),
     sourceRefs: ["user-input:original-request"],
   }]
@@ -173,7 +185,7 @@ export function validateHumanDecisionContract(
   decisionItems: unknown,
   summary = "",
 ): ValidationFinding[] {
-  if (!stage.humanGate || !DECISION_LEDGER_SCOPES.has(stage.scopeContract?.id ?? "")) return []
+  if (!(stage.decisionGate || stage.humanGate) || !DECISION_LEDGER_SCOPES.has(stage.scopeContract?.id ?? "")) return []
   const findings: ValidationFinding[] = []
   const items = normalizedDecisionItems(decisionItems, stage.id)
   if (!items) return [{
@@ -181,7 +193,11 @@ export function validateHumanDecisionContract(
     message: "DDD 建模里程碑必须显式提交 decisionItems 数组；没有待选择项时提交空数组。审核区由运行时生成，禁止依赖自由 Markdown 猜测人类决策。",
   }]
   const ids = new Set<string>()
-  const prior = new Map((state.decisionLedger ?? []).map((item) => [item.id, item]))
+  const prior = new Map([
+    ...(state.decisionLedger ?? []).map((item) => [item.id, item] as const),
+    ...(state.checkpoints ?? []).flatMap((checkpoint) => checkpoint.decisionItems ?? [])
+      .map((item) => [item.id, item] as const),
+  ])
   const authoritativeText = canonicalDecisionText(authoritativeDecisionText(sections, summary))
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index]
@@ -261,6 +277,10 @@ export function validateHumanDecisionContract(
       code: "DECISION_ALREADY_RESOLVED", path: `${base}.id`, severity: "blocking",
       message: `决策 ${item.id} 已在上游解决，当前阶段只能通过 decision:${item.id} 引用其结果；如需改变必须退回 ownerStage。`,
     })
+    else if (prior.has(item.id) && prior.get(item.id)?.ownerStage !== stage.id) findings.push({
+      code: "DECISION_ID_ALREADY_DECLARED", path: `${base}.id`, severity: "blocking",
+      message: `决策 ${item.id} 已由阶段 ${prior.get(item.id)?.ownerStage} 声明；当前阶段必须引用它或使用新的稳定 id。`,
+    })
   }
   const decisionProseEntries = [
     ...summary.split(/\r?\n/u).map((line) => ({ path: "summary", line })),
@@ -270,7 +290,7 @@ export function validateHumanDecisionContract(
         .map((line) => ({ path: `sections.${heading}`, line }))),
   ].map((entry) => ({ ...entry, line: entry.line.trim() }))
     .filter((entry) => Boolean(entry.line) && !/^#{1,6}\s/u.test(entry.line))
-  const declaredDecisionIds = new Set(items.map((item) => item.id))
+  const declaredDecisionIds = new Set([...prior.keys(), ...items.map((item) => item.id)])
   const unknownDecisionEntries = decisionProseEntries.filter(({ line }) =>
     [...line.matchAll(/\bDEC-[A-Za-z0-9._-]+\b/gu)].some((match) => !declaredDecisionIds.has(match[0])))
   for (const [entryPath, entries] of groupDecisionEntries(unknownDecisionEntries)) findings.push({
@@ -282,8 +302,8 @@ export function validateHumanDecisionContract(
     .filter(({ line }) => !items.some((item) =>
       line.includes(item.id) && item.blocks.some((block) => line.includes(block.id))))
   for (const [entryPath, entries] of groupDecisionEntries(unresolvedEntries)) findings.push({
-    code: "UNTRACKED_OPEN_DECISION", path: entryPath, severity: "blocking",
-    message: `正文存在未登记的开放/延期问题，或只引用了 decision id 而没有对应 block target id：${entries.slice(0, 3).map((entry) => entry.line).join("；")}。每行使用 DEC-ID/BLOCK-ID 绑定一个受影响结论。`,
+    code: "UNTRACKED_OPEN_DECISION", path: entryPath, severity: "warning",
+    message: `正文看起来包含未结构化的开放/延期事项：${entries.slice(0, 3).map((entry) => entry.line).join("；")}。该提示不阻断阶段；如它确为待人工选择的决策，请写入 decisionItems 并用 DEC-ID/BLOCK-ID 绑定受影响结论。`,
   })
   const unboundEntries = decisionProseEntries.filter(({ line }) => items.some((item) =>
     line.includes(item.id) && !item.blocks.some((block) => line.includes(block.id))))
@@ -305,8 +325,7 @@ export function validateHumanDecisionContract(
     const resolvedDecisionIds = new Set((state.decisionLedger ?? [])
       .filter((item) => item.status === "resolved").map((item) => item.id))
     const untrackedTargetRules = decisionProseEntries.filter(({ line }) => {
-      if (!TARGET_BUSINESS_RULE_LANGUAGE.test(line) || OPEN_DECISION_LANGUAGE.test(line)
-        || OPEN_DECISION_NON_ASSERTIVE_LANGUAGE.test(line)) return false
+      if (!TARGET_BUSINESS_RULE_LANGUAGE.test(line) || OPEN_DECISION_NON_ASSERTIVE_LANGUAGE.test(line)) return false
       if (BASELINE_AUTHORITY_REFERENCE.test(line)) return false
       if ([...resolvedDecisionIds].some((id) => line.includes(id))) return false
       if (items.some((item) => line.includes(item.id)
@@ -352,11 +371,22 @@ export function validateExternalPartyEvidence(
 async function resolveRoot(id: Identity): Promise<{ root: string; profile: WorkflowProfile }> {
   const profile = await profileFor(id.workflowType)
   const root = await workflowRoot(id.projectRoot, profile.artifactBase, profile.artifactSubdir, id.workflowId)
+  if (await exists(statePath(root))) {
+    const state = await loadState(root)
+    if (state.workflowType !== id.workflowType || state.workflowId !== id.workflowId) {
+      throw new WorkflowError(
+        `Workflow identity mismatch: requested ${id.workflowType}/${id.workflowId}, `
+        + `but durable state owns ${state.workflowType}/${state.workflowId}. `
+        + "Omit explicit identity to use the bound workflow, or pass the durable identity exactly.",
+      )
+    }
+  }
   return { root, profile }
 }
 
-export async function initialize(input: InitInput): Promise<Transition & { workflowId: string }> {
+export async function initialize(input: InitInput): Promise<Transition & { workflowId: string; professionalSkills: Awaited<ReturnType<typeof loadStageSkills>> }> {
   const profile = await profileFor(input.workflowType)
+  const professionalSkills = await loadStageSkills(profile.stages[0])
   const root = await workflowRoot(input.projectRoot, profile.artifactBase, profile.artifactSubdir, input.workflowId)
   if (await exists(statePath(root))) throw new WorkflowError(`Workflow already exists: ${input.workflowId} at ${root}`)
   await newChange(input.projectRoot, input.workflowId, input.title, input.request)
@@ -383,17 +413,22 @@ export async function initialize(input: InitInput): Promise<Transition & { workf
   // Auto-complete the 00-request routing stage: init already captured the request.
   if (firstStage && firstStage.id === "00-request" && !firstStage.humanGate) {
     const firstMilestone = milestoneFor(profile, firstStage.document)
+    const requestArtifact = stageArtifactPath(root, firstStage)
+    await atomicText(requestArtifact, [
+      "# 阶段 00-request", "", "## 用户请求", "", input.request,
+      "", "## 路由结果", "", `- 工作流：${input.workflowType}`, `- 变更：${input.workflowId}`, "",
+    ].join("\n"))
     state.checkpoints.push({
       checkpointId: 1, stage: firstStage.id, milestone: firstMilestone?.roman ?? "",
       summary: `${input.title}：${input.request}`,
       status: "completed", review: null, reviewChecklist: [],
-      adviceRequired: false, document: firstStage.document, completedAt: now(),
+      adviceRequired: false, document: firstStage.document, artifactPath: requestArtifact, completedAt: now(),
     })
     state.currentStage = firstStage.id
     await saveState(root, state)
   }
   const t = workflowTransition(profile, state)
-  return { ...t, workflowId: input.workflowId }
+  return { ...t, workflowId: input.workflowId, professionalSkills }
 }
 
 export async function prepare(input: PrepareInput): Promise<Transition & { stageCard: any }> {
@@ -409,6 +444,7 @@ export async function prepare(input: PrepareInput): Promise<Transition & { stage
     )
   }
   const stage = stageContract(profile, stageId)
+  const professionalSkills = await loadStageSkills(stage)
   const allowed = state.status === "runtime_blocked"
     ? [state.runtimeBlock?.stage].filter(Boolean)
     : transition.allowedNextStages
@@ -430,13 +466,18 @@ export async function prepare(input: PrepareInput): Promise<Transition & { stage
   const upstream = collectUpstream(state, stage.document)
   const currentArchitectureEvidence = await compactArchitectureEvidence(root, stage.scopeContract?.id)
   const approvedModelContract = await compactApprovedModelContract(root, stage.scopeContract?.id)
-  const currentCandidate = await candidateDocument(root, profile, stage.document, {})
+  const currentCandidate = stage.summaryStage
+    ? ""
+    : await candidateStageDocument(root, profile, stage, {})
   const allowedSectionHeadings = writableHeadingsForStage(stage)
   const milestoneMissing = unfilledHeadings(currentCandidate)
   const stageCard = {
     stageId: stage.id,
     scopeContractId: stage.scopeContract?.id ?? null,
     stageTitle: stageTitle(stage),
+    phaseRequiredOutcomes: phaseContentFor(allowedSectionHeadings),
+    contentPolicy: "必须回答本阶段特有问题；只按拥有的章节展开。可用自然语言、表格或图，不强制术语逐字命中。不适用需说明业务理由，不为满足模板编造模型。字数和术语检查仅提示；缺失正文、越界、决策权限与真实证据门禁不放宽。",
+    writingGuidance: "正文会进入人工评审文档：每节先写项目中的具体结论，再用场景解释理由与取舍；术语首次出现时用当前业务说明含义。区分事实、建议与未知，不用模板说明代替分析。summary 写业务发现而非执行了哪些工具或产出了几个文件。保留当前阶段 scope、证据引用及决策 ID，不替后续阶段做决定。",
     humanGate: Boolean(stage.humanGate),
     ...(stage.adviceRequired ? { adviceRequired: true } : {}),
     ...(stage.repeatable ? { repeatable: true } : {}),
@@ -444,6 +485,8 @@ export async function prepare(input: PrepareInput): Promise<Transition & { stage
     // The scheduler owns lifecycle and permissions; compact professional
     // skills own the DDD method used inside this one stage.
     skills: stage.skills ?? [],
+    professionalSkills,
+    skillUseRule: "本次 prepare 已按阶段映射加载以下 Skill 完整原文。必须按当前 scope 使用这些专业方法；不需要再调用 skill 工具重复加载。Skill 不能授权跨阶段或跳过人工审核。",
     checklist: stage.checklist ?? [],
     upstreamSummary: upstream,
     ...(currentArchitectureEvidence ? { currentArchitectureEvidence } : {}),
@@ -461,7 +504,7 @@ export async function prepare(input: PrepareInput): Promise<Transition & { stage
       })),
       baselineUseRule: "现状能力只能按 baseline claim 原义引用；不得把查询、接口或错误结果迁移为新命令的目标规则。能力状态分类中的‘现状已存在’行必须引用对应 FACT/COMPAT claim id。",
     } : {}),
-    ...(stage.humanGate ? {
+    ...(stage.decisionGate ? {
       humanDecisionContract: {
         rule: "必须提交 decisionItems 数组；没有待选择、延期或排除事项时提交空数组。每个 open 决策使用稳定 id、2 至 4 个 options、recommendationId、blocks 和 sourceRefs。每个 block 是 {id,statement,documentSection}；statement 是批准后才可写入指定权威章节的精确业务命题，批准前只能出现在运行时审核区或备选建议。权威正文若提到开放或延期问题，必须在同一行以 DEC-ID/BLOCK-ID 绑定一个 block target。表示延期或排除的 option 必须使用 resultStatus=deferred|out-of-scope；deferred option 还必须声明 deferredToStage。运行时独占生成‘本次请您确认’。",
         submitField: "complete-stage.input.decisionItems=[{id:'DEC-...',question:'...',options:[{id:'OPT-A',label:'...',impact:'...',resultStatus:'resolved|deferred|out-of-scope',deferredToStage:'<required only for deferred>'},...],recommendationId:'OPT-A',status:'open',blocks:[{id:'RULE-01',statement:'重复收藏采用幂等且保留首次时间',documentSection:'战略事件风暴'}],sourceRefs:['user-input:original-request']}]",
@@ -494,6 +537,7 @@ export async function prepare(input: PrepareInput): Promise<Transition & { stage
     unfilledSectionHeadings: milestoneMissing.filter((heading) => allowedSectionHeadings.includes(heading)),
     ...(stage.qualityContract ? { qualityContract: {
       minTotalChars: stage.qualityContract.minSectionChars,
+      lengthAndKeywordChecks: "advisory",
       targetMaxTotalChars: (stage.qualityContract.minSectionChars ?? 600) * 2,
       minSummaryChars: stage.qualityContract.minSummaryChars,
       requiredContent: stage.qualityContract.requiredContent,
@@ -515,12 +559,15 @@ export async function prepare(input: PrepareInput): Promise<Transition & { stage
       },
     } : {}),
     allowedSectionHeadings,
+    artifactOwnership: stage.summaryStage
+      ? { owner: "runtime", output: documentPath(root, profile, stage.document), rule: "总结阶段只读取阶段产物并生成固定罗马数字文档，模型不得提供正文。" }
+      : { owner: stage.id, output: stageArtifactPath(root, stage), rule: "本阶段只能写自己的独立文档，不得直接修改罗马数字人工验收文档。" },
   }
   // A successful prepare is a Harness-owned stage selection transaction.
   // Persist it so complete-stage and resumed host sessions never have to
   // reconstruct the active stage from model memory.
   state.currentStage = stage.id
-  state.preparedStage = { stage: stage.id, preparedAt: now() }
+  state.preparedStage = { stage: stage.id, preparedAt: now(), loadedSkills: professionalSkills.map(({ name, source, sha256 }) => ({ name, source, sha256 })) }
   await saveState(root, state)
   return { ...workflowTransition(profile, state), stageCard }
 }
@@ -608,6 +655,80 @@ function humanReviewSummary(stage: any, milestone: any, summary: string, section
     ...candidates, "", "请重点确认：", ...(stage.checklist ?? []).slice(0, 5).map((item: string) => `- ${item}`),
     "", "回复 `批准`，或回复 `修改：...` 并指出不符合业务认知的决策。",
   ].join("\n")
+}
+
+async function appendRuntimeMilestoneSummary(
+  root: string,
+  profile: WorkflowProfile,
+  state: WorkflowState,
+  completedStage: any,
+): Promise<string | null> {
+  const next = profile.stages[stageIndex(profile, completedStage.id) + 1]
+  if (!next?.summaryStage) return null
+  const sourceIds = next.summarizesStages ?? []
+  const latestByStage = new Map<string, Checkpoint>()
+  for (const checkpoint of state.checkpoints) {
+    if (sourceIds.includes(checkpoint.stage) && checkpoint.status !== "superseded") {
+      latestByStage.set(checkpoint.stage, checkpoint)
+    }
+  }
+  const missingStages = sourceIds.filter((stageId) => !latestByStage.has(stageId))
+  if (missingStages.length) throw new WorkflowError(
+    `里程碑总结缺少阶段产物：${missingStages.join("、")}。总结事务不会猜测或补写业务阶段内容。`,
+  )
+  const { readFile } = await import("node:fs/promises")
+  const sourceArtifacts: Array<{ stage: any; summary: string; sections: Record<string, string> }> = []
+  const decisions = new Map<string, DecisionItem>()
+  for (const stageId of sourceIds) {
+    const sourceStage = stageContract(profile, stageId)
+    const checkpoint = latestByStage.get(stageId)!
+    const file = checkpoint.artifactPath ?? stageArtifactPath(root, sourceStage)
+    if (!await exists(file)) throw new WorkflowError(`里程碑总结找不到阶段 ${stageId} 的独立产物：${file}`)
+    sourceArtifacts.push({
+      stage: sourceStage,
+      summary: checkpoint.summary,
+      sections: documentSections(await readFile(file, "utf8")),
+    })
+    for (const item of checkpoint.decisionItems ?? []) decisions.set(item.id, structuredClone(item))
+  }
+  const decisionItems = [...decisions.values()]
+  const summary = sourceArtifacts.map((item) => `${item.stage.id}：${item.summary}`).join("；")
+  const milestoneCheckpoints = [...latestByStage.values()]
+  const plannedSlices = [...milestoneCheckpoints].reverse()
+    .map((checkpoint) => checkpoint.plannedSlices).find((value) => typeof value === "number")
+  const ambiguityResolution = [...milestoneCheckpoints].reverse()
+    .map((checkpoint) => checkpoint.ambiguityResolution).find((value) => value !== undefined)
+  const compiled = await compileMilestoneDocument(
+    root, profile, next, sourceArtifacts, renderDecisionReviewSection(decisionItems),
+  )
+  const missing = unfilledHeadings(compiled.body)
+  if (missing.length) throw new WorkflowError(
+    `里程碑 ${milestoneFor(profile, next.document)?.roman ?? "?"} 总结不完整：${missing.join("、")}。请修正拥有这些章节的业务阶段。`,
+  )
+  for (const checkpoint of state.checkpoints) {
+    if (checkpoint.stage === next.id && checkpoint.status === "revision_requested") checkpoint.status = "superseded"
+  }
+  const milestone = milestoneFor(profile, next.document)
+  state.checkpoints.push({
+    checkpointId: (state.checkpoints.at(-1)?.checkpointId ?? 0) + 1,
+    stage: next.id,
+    milestone: milestone?.roman ?? "",
+    summary,
+    status: "awaiting_review",
+    review: null,
+    reviewTitle: next.reviewTitle,
+    reviewChecklist: next.checklist ?? [],
+    adviceRequired: Boolean(next.adviceRequired),
+    document: next.document,
+    artifactPath: compiled.file,
+    completedAt: now(),
+    plannedSlices,
+    ambiguityResolution,
+    decisionItems,
+    humanReviewSummary: humanReviewSummary(next, milestone, summary, compiled.sections, decisionItems),
+  })
+  state.currentStage = next.id
+  return compiled.file
 }
 
 type StageDraft = Pick<SubmitInput, "summary" | "sections" | "claims" | "ambiguityResolution" | "decisionItems" | "plannedSlices" | "sliceId"> & {
@@ -733,15 +854,13 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
   const pendingDraftFile = stageDraftPath(root, input.stage)
   const pendingDraft = await exists(pendingDraftFile) ? await readJson<StageDraft>(pendingDraftFile) : undefined
   const merged = await mergeStageDraft(root, input)
-  const stageWriters = profile.stages.filter((item) => item.document === stage.document)
-  const closesHumanMilestone = Boolean(stage.humanGate && stageWriters.at(-1)?.id === stage.id)
-  if (closesHumanMilestone && DECISION_LEDGER_SCOPES.has(stage.scopeContract?.id ?? "")) {
+  if (stage.summaryStage) throw new WorkflowError(
+    `阶段 ${stage.id} 是运行时总结事务，禁止模型直接提交；它会在所属业务阶段完成后自动生成。`,
+  )
+  if (stage.decisionGate && DECISION_LEDGER_SCOPES.has(stage.scopeContract?.id ?? "")) {
     const items = normalizedDecisionItems(merged.decisionItems, stage.id)
       ?? legacyDecisionItems(merged.ambiguityResolution, stage.id, merged.sections)
-    if (items) {
-      merged.decisionItems = items
-      merged.sections["本次请您确认"] = renderDecisionReviewSection(items)
-    }
+    if (items) merged.decisionItems = items
   }
   const partial = input.finalize === false
   const findings = [
@@ -757,7 +876,7 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
     if (findings.some((finding) => finding.code === "STAGE_NOT_ALLOWED")) {
       return {
         ...workflowTransition(profile, state), findings,
-        documentPath: documentPath(root, profile, stage.document),
+        documentPath: stageArtifactPath(root, stage),
         draft: {
           saved: false,
           repairOnly: false,
@@ -767,9 +886,40 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
         },
       }
     }
+    // A runtime-compiled delivery milestone has no model-editable source text:
+    // complete-stage will rebuild it from the structured plan on every call.
+    // Persisting a repair draft here creates an impossible retry contract and
+    // can livelock weaker schedulers. Make the durable state agree with the
+    // tool result and require the compiler/plan gate to be repaired instead.
+    if (!partial && stage.deliveryAssetGate && input.runtimeCompiled) {
+      const blocking = findings.filter((finding) => finding.severity === "blocking")
+      state.status = "runtime_blocked"
+      state.currentStage = stage.id
+      delete state.preparedStage
+      state.runtimeBlock = {
+        stage: stage.id,
+        reason: "运行时确定性编译的交付里程碑未通过发布门禁，模型无法通过重写阶段正文修复。",
+        evidence: blocking.map((finding) => `${finding.code}@${finding.path}: ${finding.message}`),
+        remediation: ["修正结构化交付计划、确定性编译器或对应校验规则后，重新 prepare 当前阶段。"],
+        blockedAt: now(),
+      }
+      await saveState(root, state)
+      await import("node:fs/promises").then(({ rm }) => rm(pendingDraftFile, { force: true }))
+      return {
+        ...workflowTransition(profile, state), findings,
+        documentPath: stageArtifactPath(root, stage),
+        draft: {
+          saved: false,
+          repairOnly: false,
+          retryableByModel: false,
+          mustStop: true,
+          nextAction: "这是运行时编译或门禁故障，不是 Markdown 内容修订任务。停止重试 complete-stage；修复结构化计划、编译器或校验规则后再 prepare 当前阶段。",
+        },
+      }
+    }
     // Deliberately partial drafts are only persisted after validation. This
     // keeps the workbench from becoming a bypass for out-of-stage content.
-    if (partial) return { ...workflowTransition(profile, state), findings, documentPath: documentPath(root, profile, stage.document) }
+    if (partial) return { ...workflowTransition(profile, state), findings, documentPath: stageArtifactPath(root, stage) }
     const file = stageDraftPath(root, stage.id)
     const previous = await exists(file) ? await readJson<StageDraft>(file) : undefined
     const signature = findings.filter((finding) => finding.severity === "blocking")
@@ -791,12 +941,27 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
       plannedSlices: merged.plannedSlices, sliceId: merged.sliceId,
       validation: { signature, repeated },
     } satisfies StageDraft)
+    if (repeated >= 3) {
+      const blocking = findings.filter((finding) => finding.severity === "blocking")
+      state.status = "runtime_blocked"
+      state.currentStage = stage.id
+      delete state.preparedStage
+      state.runtimeBlock = {
+        stage: stage.id,
+        reason: "同一组阶段门禁连续三次未被修复，自动修订已熔断，必须先检查候选稿、阶段指导或校验规则。",
+        evidence: blocking.map((finding) => `${finding.code}@${finding.path}: ${finding.message}`),
+        remediation: ["由人工核对阻塞项及候选稿，必要时修正阶段指导或校验规则；确认后重新 prepare 当前阶段。"],
+        blockedAt: now(),
+      }
+      await saveState(root, state)
+    }
     return {
       ...workflowTransition(profile, state), findings,
-      documentPath: documentPath(root, profile, stage.document),
+      documentPath: stageArtifactPath(root, stage),
       draft: {
         saved: true, repairOnly: true, repeatedFindingSet: repeated,
         retryableByModel: repeated < 3,
+        mustStop: repeated >= 3,
         repairContract: { editablePaths, replaceObservations, preserveOtherSections: true },
         nextAction: repeated < 3
           ? replaceObservations
@@ -816,7 +981,7 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
     const allowed = writableHeadingsForStage(stage)
     return {
       ...workflowTransition(profile, state), findings,
-      documentPath: documentPath(root, profile, stage.document),
+      documentPath: stageArtifactPath(root, stage),
       draft: {
         saved: true, stage: stage.id,
         completedSections: Object.keys(merged.sections),
@@ -826,33 +991,25 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
       },
     }
   }
-  await publishSections(root, profile, stage.document, merged.sections)
+  const businessArtifact = await publishStageSections(root, profile, stage, merged.sections)
   const milestone = milestoneFor(profile, stage.document)
-  const writers = profile.stages.filter((s) => s.document === stage.document)
-  const isLastWriter = writers.at(-1)?.id === stage.id
-  if (stage.humanGate && isLastWriter) {
-    await publishSections(root, profile, stage.document, {
-      "业务验收记录": "- 验收状态：待人工验收\n- 上一次退回意见已完成修订，请以当前文档为准。",
-    })
-  }
   const checkpoint: Checkpoint = {
     checkpointId: (state.checkpoints.at(-1)?.checkpointId ?? 0) + 1,
     stage: stage.id,
     milestone: milestone?.roman ?? "",
     summary: merged.summary,
-    status: (stage.humanGate && isLastWriter ? "awaiting_review" : "completed") as Checkpoint["status"],
+    status: "completed",
     review: null,
     reviewTitle: stage.reviewTitle,
-    reviewChecklist: stage.humanGate ? (stage.checklist ?? []) : [],
+    reviewChecklist: [],
     adviceRequired: Boolean(stage.adviceRequired),
     document: stage.document,
+    artifactPath: businessArtifact,
     completedAt: now(),
     plannedSlices: merged.plannedSlices,
     sliceId: merged.sliceId,
     ambiguityResolution: merged.ambiguityResolution,
     decisionItems: normalizedDecisionItems(merged.decisionItems, stage.id),
-    humanReviewSummary: stage.humanGate && isLastWriter
-      ? humanReviewSummary(stage, milestone, merged.summary, merged.sections, merged.decisionItems) : undefined,
     claims: Array.isArray(merged.claims) ? structuredClone(merged.claims) : undefined,
   }
   state.checkpoints.push(checkpoint)
@@ -869,13 +1026,11 @@ export async function submit(input: SubmitInput): Promise<Transition & { finding
   if (state.status === "revision_requested") state.status = "active"
   state.currentStage = stage.id
   delete state.preparedStage
-  if (stage.humanGate && isLastWriter) {
-    // milestone ready, awaiting review; status stays active but transition reflects gate
-  }
+  const summaryDocument = await appendRuntimeMilestoneSummary(root, profile, state, stage)
   await saveState(root, state)
   await import("node:fs/promises").then(({ rm }) => rm(stageDraftPath(root, stage.id), { force: true }))
   const transition = workflowTransition(profile, state)
-  return { ...transition, findings, documentPath: documentPath(root, profile, stage.document) }
+  return { ...transition, findings, documentPath: summaryDocument ?? businessArtifact }
 }
 
 async function validateSubmission(root: string, profile: WorkflowProfile, state: WorkflowState, stage: any, input: SubmitInput, options: { partial?: boolean } = {}): Promise<ValidationFinding[]> {
@@ -889,8 +1044,8 @@ async function validateSubmission(root: string, profile: WorkflowProfile, state:
       message: `阶段 ${input.stage} 不是当前合法阶段；只允许：${allowed.join("、") || "无"}。必须按 transition 推进。` })
   }
   if (!input.summary || input.summary.trim().length < (stage.qualityContract?.minSummaryChars ?? 20)) {
-    findings.push({ code: "SUMMARY_TOO_SHORT", path: "summary", severity: "blocking",
-      message: `summary 至少 ${stage.qualityContract?.minSummaryChars ?? 20} 字，当前 ${input.summary?.trim().length ?? 0} 字。` })
+    findings.push({ code: "SUMMARY_TOO_SHORT", path: "summary", severity: input.summary?.trim() ? "warning" : "blocking",
+      message: input.summary?.trim() ? `摘要偏短（${input.summary.trim().length} 字），请确认已经表达业务结论；无需为凑字数重试。` : "摘要不能为空，请说明本阶段业务结论。" })
   }
   if (!input.sections || Object.keys(input.sections).length === 0) {
     findings.push({ code: "SECTIONS_EMPTY", path: "sections", severity: "blocking", message: "sections 不能为空。" })
@@ -970,11 +1125,9 @@ async function validateSubmission(root: string, profile: WorkflowProfile, state:
   findings.push(...await validateStageClaims(state, stage.scopeContract?.id, writableHeadings, input.sections, input.claims, input.summary))
   findings.push(...validateStageSemantics(state, stage, input))
   if (!options.partial && stage.implementationEvidence) findings.push(...await validateImplementationEvidence(state, input))
-  const candidate = await candidateDocument(root, profile, stage.document, input.sections)
+  const candidate = await candidateStageDocument(root, profile, stage, input.sections)
   const candidateSections = documentSections(candidate)
-  const milestoneWriters = profile.stages.filter((item) => item.document === stage.document)
-  const closesHumanMilestone = Boolean(stage.humanGate && milestoneWriters.at(-1)?.id === stage.id)
-  if (!options.partial && closesHumanMilestone) {
+  if (!options.partial && stage.decisionGate) {
     findings.push(...validateHumanDecisionContract(state, stage, candidateSections, input.decisionItems, input.summary))
   }
   if (!options.partial) findings.push(...validateExternalPartyEvidence(state, stage, candidateSections))
@@ -985,8 +1138,8 @@ async function validateSubmission(root: string, profile: WorkflowProfile, state:
   if (!options.partial && required) {
     for (const concept of required) {
       if (!containsRequiredConcept(candidate, concept)) {
-        findings.push({ code: "REQUIRED_CONTENT_MISSING", path: "sections", severity: "blocking",
-          message: `候选里程碑缺少必需业务概念：「${concept}」。` })
+        findings.push({ code: "REQUIRED_CONTENT_MISSING", path: "sections", severity: "warning",
+          message: `未匹配到「${concept}」的词面表达，请核对相应业务内容是否已说明；允许等价表述，不因关键词缺失阻塞。` })
       }
     }
   }
@@ -994,14 +1147,6 @@ async function validateSubmission(root: string, profile: WorkflowProfile, state:
   if (!options.partial && ownMissing.length) {
     findings.push({ code: "STAGE_OWNED_SECTIONS_INCOMPLETE", path: "sections", severity: "blocking",
       message: `阶段 ${stage.id} 尚未完成自己拥有的章节：${ownMissing.join("、")}。不得把缺口留给后续阶段。` })
-  }
-  const writers = profile.stages.filter((item) => item.document === stage.document)
-  if (!options.partial && stage.humanGate && writers.at(-1)?.id === stage.id) {
-    const missing = unfilledHeadings(candidate)
-    if (missing.length) {
-      findings.push({ code: "MILESTONE_DOCUMENT_INCOMPLETE", path: "sections", severity: "blocking",
-        message: `人工里程碑文档仍有未完成章节：${missing.join("、")}。请在本次 submit 一并补齐，禁止把占位内容提交给用户验收。` })
-    }
   }
   return findings
 }
@@ -1022,7 +1167,11 @@ export async function validateMandatoryCompatibilityConstraints(
     const ref = String(constraint?.ref ?? "").trim()
     const text = String(constraint?.text ?? "").replace(/^L\d+:\s*/u, "").trim()
     if (!text) continue
-    const identifiers = [...new Set(text.match(/\b[A-Z][A-Za-z0-9_]{3,}\b/gu) ?? [])]
+    // Only constant-like identifiers are stable cross-language anchors. The
+    // previous CamelCase-friendly expression also captured ordinary English
+    // prose such as "This", "Platform", and "Required", making a correctly
+    // traced DATABASE_URL constraint impossible to satisfy in Chinese output.
+    const identifiers = [...new Set(text.match(/\b[A-Z][A-Z0-9_]{2,}\b/gu) ?? [])]
     const semanticAnchors = [...new Set(text.match(/持久化|存储|身份|认证|兼容|测试|事务|排序|文件|数据库/gu) ?? [])]
     const identifiersCovered = identifiers.length > 0 && identifiers.every((token) => candidate.includes(token))
     const semanticCovered = identifiers.length === 0 && semanticAnchors.length > 0
@@ -1526,14 +1675,32 @@ export async function review(input: ReviewInput): Promise<Transition & { reviewR
   }
   const { root, profile } = await resolveRoot(input)
   const state = await loadState(root)
-  const idx = state.checkpoints.map((c) => c.stage).lastIndexOf(input.stage)
+  let idx = state.checkpoints.map((c) => c.stage).lastIndexOf(input.stage)
   if (idx < 0) throw new WorkflowError(`未找到阶段 ${input.stage} 的 checkpoint。`)
-  const checkpoint = state.checkpoints[idx]
+  let checkpoint = state.checkpoints[idx]
+  // Compatibility for callers that still name the last Arabic business
+  // stage. Human review is always rebound to the runtime-owned Roman summary.
+  if (checkpoint.status !== "awaiting_review") {
+    let summaryIndex = -1
+    for (let candidateIndex = state.checkpoints.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
+      const candidate = state.checkpoints[candidateIndex]
+      const contract = profile.stages.find((stage) => stage.id === candidate.stage)
+      if (candidate.status === "awaiting_review" && contract?.summaryStage
+        && contract.summarizesStages?.includes(input.stage)) {
+        summaryIndex = candidateIndex
+        break
+      }
+    }
+    if (summaryIndex >= 0) {
+      idx = summaryIndex
+      checkpoint = state.checkpoints[idx]
+    }
+  }
   if (checkpoint.status === "revision_requested" && input.decision === "revise") {
     return { ...workflowTransition(profile, state), reviewRecord: checkpoint.review }
   }
   if (checkpoint.status !== "awaiting_review") throw new WorkflowError(`阶段 ${input.stage} 不在待验收状态。`)
-  const stage = stageContract(profile, input.stage)
+  const stage = stageContract(profile, checkpoint.stage)
   const document = await import("node:fs/promises").then(({ readFile }) => readFile(documentPath(root, profile, checkpoint.document), "utf8"))
   let record = { decision: input.decision, reviewer: input.reviewer, reviewedAt: now(), feedback: input.feedback ?? "" }
   if (input.decision === "approve") {
@@ -1618,7 +1785,7 @@ export async function review(input: ReviewInput): Promise<Transition & { reviewR
       if (state.deliveryPlan) state.deliveryPlan.approvedAt = now()
     }
     if (stage.openspecArchiveGate) state.status = "awaiting_archive"
-    else if (stageIndex(profile, input.stage) === profile.stages.length - 1) state.status = "complete"
+    else if (stageIndex(profile, checkpoint.stage) === profile.stages.length - 1) state.status = "complete"
   } else if (input.decision === "revise") {
     checkpoint.status = "revision_requested"
     state.status = "revision_requested"

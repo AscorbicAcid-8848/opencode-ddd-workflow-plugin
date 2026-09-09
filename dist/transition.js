@@ -102,11 +102,11 @@ export function workflowTransition(profile, state) {
     if (state.status === "revision_requested") {
         const explicit = feedbackOwnerStage(profile, latest, idx);
         const revisionStages = explicit ? [explicit]
-            : writers.filter((w) => w.id !== "00-request" && stageIndex(profile, w.id) <= idx).map((w) => w.id);
+            : writers.filter((w) => w.id !== "00-request" && !w.summaryStage && stageIndex(profile, w.id) <= idx).map((w) => w.id);
         const allowed = revisionStages.length ? revisionStages : [latest.stage];
         return common({
             ...base, milestoneReady: false, milestoneStatus: "revision-required",
-            stageRole: "milestone-building", documentRole: "cumulative-working-document",
+            stageRole: "milestone-building", documentRole: "stage-artifact",
             humanReviewRequired: false, mustContinue: true, stopAllowed: false, requiredAction: "revise",
             nextStage: allowed.length === 1 ? allowed[0] : null, allowedNextStages: allowed, nextHumanGate: latest.stage,
             message: allowed.length === 1
@@ -122,7 +122,7 @@ export function workflowTransition(profile, state) {
         });
     if (state.status === "runtime_blocked")
         return common({
-            ...base, stageRole: "blocked", documentRole: "cumulative-working-document", humanReviewRequired: false,
+            ...base, stageRole: "blocked", documentRole: "stage-artifact", humanReviewRequired: false,
             mustContinue: false, stopAllowed: true, stopReason: "runtime-blocked", requiredAction: "stop",
             nextStage: state.runtimeBlock?.stage ?? state.currentStage,
             allowedNextStages: [state.runtimeBlock?.stage ?? state.currentStage].filter(Boolean),
@@ -135,11 +135,24 @@ export function workflowTransition(profile, state) {
             message: "最终验收已批准，必须完成 OpenSpec 严格校验与归档。",
         });
     const choices = cycleChoices(profile, latest);
-    const normalNextContract = profile.stages[idx + 1];
+    let normalNextContract = profile.stages[idx + 1];
+    // States created before summary stages existed may already contain an
+    // approved former gate. Treat that approval as the equivalent summary
+    // approval instead of forcing a duplicate human checkpoint.
+    if (normalNextContract?.summaryStage && latest.status === "approved") {
+        normalNextContract = profile.stages[idx + 2];
+    }
     const normalNext = normalNextContract?.id ?? null;
     const progress = implementationProgress(state);
     let allowed = choices.length > 1 ? choices : normalNext ? [normalNext] : [];
-    if (normalNextContract?.requiresCompletedImplementation) {
+    // Once every approved slice is complete, the implementation loop has no
+    // remaining model decision. Advance deterministically to model review so a
+    // weaker scheduler cannot mistake milestone VI "accumulating" for the
+    // human gate or choose another unnecessary implementation pass.
+    if (stage?.implementationEvidence && progress.known && progress.complete && normalNext) {
+        allowed = [normalNext];
+    }
+    else if (normalNextContract?.requiresCompletedImplementation) {
         if (progress.known && progress.complete)
             allowed = [normalNextContract.id];
         else {
@@ -158,7 +171,7 @@ export function workflowTransition(profile, state) {
     const nextHumanGate = next && profile.stages.find((s) => s.id === next)?.humanGate ? next
         : select ? allowed.find((c) => profile.stages.find((s) => s.id === c)?.humanGate) ?? null : null;
     return common({
-        ...base, stageRole: "milestone-building", documentRole: "cumulative-working-document",
+        ...base, stageRole: "milestone-building", documentRole: "stage-artifact",
         humanReviewRequired: false, mustContinue: true, stopAllowed: false, requiredAction: select ? "select-next-stage" : "continue",
         nextStage: next, allowedNextStages: allowed, nextHumanGate,
         message: select

@@ -373,6 +373,39 @@ async function freshProject() {
   return mkdtemp(path.join(tmpdir(), "ddd-v2-"))
 }
 
+async function seedCompleteSourceScan(dir) {
+  await mkdir(path.join(dir, "src"), { recursive: true })
+  await writeFile(path.join(dir, "src", "app.js"), "export function existingEntry(value) { return value }\n", "utf8")
+}
+
+test("prepare rejects an explicit workflow identity that conflicts with durable state", async () => {
+  const dir = await freshProject()
+  const workflowId = "identity-mismatch"
+  try {
+    await initialize({
+      workflowType: "refactor-system",
+      workflowId,
+      projectRoot: dir,
+      title: "身份不匹配保护",
+      request: "在保持现有行为的前提下重构整个项目",
+    })
+    const root = path.join(dir, "openspec", "changes", workflowId, "ddd")
+    const before = await loadState(root)
+
+    await assert.rejects(
+      prepare({ workflowType: "add-feature", workflowId, projectRoot: dir }),
+      /Workflow identity mismatch/u,
+    )
+
+    const after = await loadState(root)
+    assert.equal(after.workflowType, "refactor-system")
+    assert.equal(after.currentStage, before.currentStage)
+    assert.deepEqual(after.preparedStage, before.preparedStage)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 const longSummary = "本阶段结论已完成并形成必要证据，可进入下一里程碑。"
 
 test("OpenSpec bridge writes official metadata and planning artifact graph", async () => {
@@ -654,7 +687,7 @@ async function completeMilestoneI(dir, workflowId) {
   return result
 }
 
-test("init creates state and milestone skeletons", async () => {
+test("init creates state and an independent request-stage artifact", async () => {
   const dir = await freshProject()
   try {
     const t = await initialize({
@@ -668,6 +701,7 @@ test("init creates state and milestone skeletons", async () => {
     const state = JSON.parse(await readFile(stateFile, "utf8"))
     assert.equal(state.workflowType, "add-feature")
     assert.equal(state.status, "active")
+    assert.match(await readFile(path.join(dir, "openspec", "changes", "test-feat-1", "ddd", ".ddd", "stages", "00-request.md"), "utf8"), /为现有系统新增测试功能/u)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -722,8 +756,7 @@ test("prepare projects approved prior-milestone summaries into a fresh stage car
       resolution: { selectedCandidateId: "candidate-a" } })
     const prepared = await prepare({ workflowType: "add-feature", workflowId: "upstream", projectRoot: dir,
       stage: "03-strategic-impact" })
-    assert.ok(prepared.stageCard.upstreamSummary.some((item) => item.startsWith("[02-big-picture-event-storm]")))
-    assert.ok(!prepared.stageCard.upstreamSummary.some((item) => item.startsWith("[01-current-evidence]")))
+    assert.ok(prepared.stageCard.upstreamSummary.some((item) => item.startsWith("[milestone-I-summary]")))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -884,6 +917,7 @@ test("evidence stage rejects model-invented negative search references", async (
 test("signed negative search evidence cannot be widened into capability absence", async () => {
   const dir = await freshProject()
   try {
+    await seedCompleteSourceScan(dir)
     const workflowId = "bounded-negative-search"
     await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
     const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
@@ -909,6 +943,7 @@ test("signed negative search evidence cannot be widened into capability absence"
 test("signed negative search evidence accepts only its bounded issued statement", async () => {
   const dir = await freshProject()
   try {
+    await seedCompleteSourceScan(dir)
     const workflowId = "exact-negative-search"
     await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
     const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
@@ -956,6 +991,7 @@ test("positive code evidence must use an exact excerpt ref issued by the bundle"
 test("signed negative search prose cannot outlive its typed evidence-gap claim", async () => {
   const dir = await freshProject()
   try {
+    await seedCompleteSourceScan(dir)
     const workflowId = "signed-search-claim-link"
     await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
     const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
@@ -973,6 +1009,7 @@ test("signed negative search prose cannot outlive its typed evidence-gap claim",
 test("signed negative search statement cannot outlive its typed claim when prose omits the ref", async () => {
   const dir = await freshProject()
   try {
+    await seedCompleteSourceScan(dir)
     const workflowId = "signed-search-statement-link"
     await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
     const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
@@ -990,6 +1027,7 @@ test("signed negative search statement cannot outlive its typed claim when prose
 test("signed negative search must remain a hypothesis with unknown availability", async () => {
   const dir = await freshProject()
   try {
+    await seedCompleteSourceScan(dir)
     const workflowId = "signed-search-type"
     await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
     const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
@@ -1046,6 +1084,7 @@ test("exact-term negative search cannot be widened into a completely new capabil
 test("signed term absence cannot become no implementation claims in summary or prose", async () => {
   const dir = await freshProject()
   try {
+    await seedCompleteSourceScan(dir)
     const workflowId = "no-implementation-inference"
     await initialize({ workflowType: "add-feature", workflowId, projectRoot: dir, title: "t", request: "新增收藏查询" })
     const packet = await evidenceBundle(dir, workflowId, ["favorite", "controller"])
@@ -1426,7 +1465,8 @@ test("a decision deferred in prose must still be registered with a decision id",
   const findings = validateHumanDecisionContract({}, stage, {
     "战略事件风暴": "同一收藏时间下的稳定次序需在后续用例阶段定义。",
   }, [])
-  assert.ok(findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"))
+  assert.ok(findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"
+    && finding.severity === "warning"))
 })
 
 test("open-problem language cannot disappear without a typed deferred decision", () => {
@@ -1434,7 +1474,23 @@ test("open-problem language cannot disappear without a typed deferred decision",
   const findings = validateHumanDecisionContract({}, stage, {
     "热点与边界线索": "查询分页与店铺失效后的展示行为均保持为开放问题。",
   }, [])
-  assert.ok(findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"))
+  assert.ok(findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"
+    && finding.severity === "warning"))
+})
+
+test("behavior-preservation prose is not inferred to be an open decision", () => {
+  const stage = { id: "04-service-use-cases", humanGate: true, scopeContract: { id: "system-strategy" } }
+  const findings = validateHumanDecisionContract(
+    { originalRequest: "重构整个项目，保持所有现有可观察行为" },
+    stage,
+    {
+      "实现单元用例包": "实现单元保留外部行为，以流程职责协调既有入口、结果和持久化协作，不新增能力。",
+    },
+    [],
+    "形成实现单元用例包，保留所有现有可观察行为和结果。",
+  )
+  assert.ok(!findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"))
+  assert.equal(findings.filter((finding) => finding.severity === "blocking").length, 0)
 })
 
 test("future questions retain their exact section repair path across common wording", () => {
@@ -1546,12 +1602,23 @@ test("strategic use-case packaging cannot promote rules deferred to tactical eve
   assert.match(promoted.message, /权限|重复|撤销/u)
 })
 
+test("a concise nonempty summary warns without blocking a valid evidence stage", async () => {
+  const dir = await freshProject()
+  try {
+    await initialize({workflowType:"add-feature",workflowId:"concise",projectRoot:dir,title:"t",request:"新增明确功能"})
+    const result = await submit({workflowType:"add-feature",workflowId:"concise",projectRoot:dir,
+      stage:"01-current-evidence",summary:"已核实既有入口。",...baselinePayload()})
+    assert.ok(result.findings.some(f=>f.code === "SUMMARY_TOO_SHORT" && f.severity === "warning"))
+    assert.equal(result.findings.filter(f=>f.severity === "blocking").length,0)
+  } finally { await rm(dir,{recursive:true,force:true}) }
+})
+
 test("blocking stage draft is saved, repaired incrementally, and fused after repeated identical failures", async () => {
   const dir = await freshProject()
   try {
     await initialize({ workflowType: "add-feature", workflowId: "draft-repair", projectRoot: dir, title: "t", request: "新增明确功能" })
     const first = await submit({ workflowType: "add-feature", workflowId: "draft-repair", projectRoot: dir,
-      stage: "01-current-evidence", summary: "太短", ...baselinePayload() })
+      stage: "01-current-evidence", summary: " ", ...baselinePayload() })
     assert.equal(first.draft.saved, true)
     assert.equal(first.draft.repairOnly, true)
     assert.equal(first.draft.repeatedFindingSet, 1)
@@ -1562,12 +1629,17 @@ test("blocking stage draft is saved, repaired incrementally, and fused after rep
 
     await initialize({ workflowType: "add-feature", workflowId: "draft-fuse", projectRoot: dir, title: "t", request: "新增明确功能" })
     let failed
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    // Empty feedback also adds REPAIR_WRITESET_NOT_TOUCHED after the first draft;
+    // the unchanged two-finding set must repeat three times to trip the fuse.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
       failed = await submit({ workflowType: "add-feature", workflowId: "draft-fuse", projectRoot: dir,
-        stage: "01-current-evidence", summary: "太短", ...baselinePayload() })
+        stage: "01-current-evidence", summary: " ", ...baselinePayload() })
     }
     assert.equal(failed.draft.repeatedFindingSet, 3)
     assert.equal(failed.draft.retryableByModel, false)
+    assert.equal(failed.draft.mustStop, true)
+    assert.equal(failed.workflowStatus, "runtime_blocked")
+    assert.equal(failed.requiredAction, "stop")
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -1586,11 +1658,18 @@ test("a saved section blocker cannot be bypassed by changing only the summary", 
       .map((concept) => `### ${concept}\n该业务分析维度已覆盖。`).join("\n\n")
     const sections = Object.fromEntries(prepared.stageCard.unfilledSectionHeadings.map((heading) => [heading,
       `### ${heading}结论\n围绕用户目标形成系统级业务场景、事件、规则、异常、读模型和候选边界线索。\n\n${concepts}`]))
-    sections["热点与边界线索"] += "\n\n分页规模作为后续约束问题保留。"
+    sections["热点与边界线索"] += "\n\n分页语义仍由 DEC-PAGE 决定。"
+    const decisions = [...milestoneIDecisionItems(), {
+      id: "DEC-PAGE", question: "分页容量规则如何确定？",
+      options: [{ id: "KEEP", label: "保持现状" }, { id: "CHANGE", label: "调整容量" }],
+      recommendationId: "KEEP", status: "open",
+      blocks: [{ id: "RULE-PAGE", statement: "查询分页容量规则", documentSection: "热点与边界线索" }],
+      sourceRefs: ["user-input:original-request"],
+    }]
     const failed = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
       stage: "02-big-picture-event-storm", summary: longSummary, sections,
-      decisionItems: milestoneIDecisionItems() })
-    assert.ok(failed.findings.some((finding) => finding.code === "UNTRACKED_OPEN_DECISION"
+      decisionItems: decisions })
+    assert.ok(failed.findings.some((finding) => finding.code === "DECISION_REFERENCE_WITHOUT_BLOCK_TARGET"
       && finding.path === "sections.热点与边界线索"))
 
     const bypass = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
@@ -1695,24 +1774,25 @@ test("invalid headings are not retained in the repair workbench", async () => {
   }
 })
 
-test("strategic event storm rejects query completion presented as a domain event", async () => {
+test("strategic event storm rejects a read-model result presented as a domain event", async () => {
   const dir = await freshProject()
   try {
-    await initialize({ workflowType: "add-feature", workflowId: "query-event", projectRoot: dir, title: "t", request: "新增访问轨迹查询" })
+    await initialize({ workflowType: "add-feature", workflowId: "query-event", projectRoot: dir, title: "t", request: "新增账户摘要查询" })
     await submit({ workflowType: "add-feature", workflowId: "query-event", projectRoot: dir,
       stage: "01-current-evidence", summary: longSummary, ...baselinePayload() })
     const r = await submit({ workflowType: "add-feature", workflowId: "query-event", projectRoot: dir,
       stage: "02-big-picture-event-storm", summary: longSummary,
-      sections: { "战略事件风暴": "过去时领域事件：店铺已查看；当日轨迹已查询。\n事件时间线：用户查询后返回读模型。" } })
+      sections: { "战略事件风暴": "主体 → 查询账户摘要 → 领域事件：账户摘要已返回。\n该结果实际只是查询读模型。" } })
     assert.ok(r.findings.some((f) => f.code === "STRATEGIC_EVENT_NOT_STATE_CHANGE"))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
 })
 
-test("strategic event storm rejects standalone English query-result event names", () => {
-  const hits = queryPseudoEvents("1. ShopVisited\n2. DailyTrailQueried ⭐ — 用户查询一日轨迹")
-  assert.ok(hits.includes("DailyTrailQueried"))
+test("strategic event storm detects English query results without relying on one business noun", () => {
+  const hits = queryPseudoEvents("1. PaymentCaptured\n2. AccountSummaryLoaded — 用户查询账户摘要")
+  assert.ok(hits.includes("AccountSummaryLoaded"))
+  assert.ok(!hits.includes("PaymentCaptured"))
 })
 
 test("strategic event storm keeps real command events after an explicit query result", () => {
@@ -1733,60 +1813,45 @@ test("strategic event storm keeps real command events after an explicit query re
   assert.ok(pseudo.includes("活动详情已返回"))
 })
 
-test("strategic event storm rejects a returned trail marked with the event icon", async () => {
+test("strategic event storm rejects an inventory read model marked with the event icon", async () => {
   const dir = await freshProject()
   try {
-    await initialize({ workflowType: "add-feature", workflowId: "returned-trail-event", projectRoot: dir, title: "t", request: "新增访问轨迹查询" })
-    await submit({ workflowType: "add-feature", workflowId: "returned-trail-event", projectRoot: dir,
+    await initialize({ workflowType: "add-feature", workflowId: "returned-inventory-event", projectRoot: dir, title: "t", request: "新增库存列表查询" })
+    await submit({ workflowType: "add-feature", workflowId: "returned-inventory-event", projectRoot: dir,
       stage: "01-current-evidence", summary: longSummary, ...baselinePayload() })
-    const r = await submit({ workflowType: "add-feature", workflowId: "returned-trail-event", projectRoot: dir,
+    const r = await submit({ workflowType: "add-feature", workflowId: "returned-inventory-event", projectRoot: dir,
       stage: "02-big-picture-event-storm", summary: longSummary,
-      sections: { "战略事件风暴": "### 事件时间线\n⚡ 店铺详情页已查看。\n⚡ 查看轨迹已返回。\n📖 一日查看轨迹列表。" } })
+      sections: { "战略事件风暴": "### 事件时间线\n仓库人员 → 查询库存列表 → 🟧库存列表已返回 → 🟪库存读模型。" } })
     assert.ok(r.findings.some((f) => f.code === "STRATEGIC_EVENT_NOT_STATE_CHANGE"))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
 })
 
-test("strategic event storm rejects returned detail labeled as a parenthesized event", async () => {
+test("strategic event storm accepts a query result explicitly labeled as a read model", async () => {
   const dir = await freshProject()
   try {
-    await initialize({ workflowType: "add-feature", workflowId: "returned-detail-event", projectRoot: dir, title: "t", request: "新增访问轨迹" })
-    await submit({ workflowType: "add-feature", workflowId: "returned-detail-event", projectRoot: dir,
-      stage: "01-current-evidence", summary: longSummary, ...baselinePayload() })
-    const r = await submit({ workflowType: "add-feature", workflowId: "returned-detail-event", projectRoot: dir,
-      stage: "02-big-picture-event-storm", summary: longSummary,
-      sections: { "战略事件风暴": "### 事件时间线\n用户 → 查看店铺详情(命令) → 店铺详情已返回(事件)\n页面查看已记录(事件)。" } })
-    assert.ok(r.findings.some((f) => f.code === "STRATEGIC_EVENT_NOT_STATE_CHANGE"))
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-})
-
-test("strategic event storm accepts returned detail explicitly labeled as a read model", async () => {
-  const dir = await freshProject()
-  try {
-    await initialize({ workflowType: "add-feature", workflowId: "returned-detail-read-model", projectRoot: dir, title: "t", request: "新增访问轨迹" })
+    await initialize({ workflowType: "add-feature", workflowId: "returned-detail-read-model", projectRoot: dir, title: "t", request: "新增账户详情查询" })
     await submit({ workflowType: "add-feature", workflowId: "returned-detail-read-model", projectRoot: dir,
       stage: "01-current-evidence", summary: longSummary, ...baselinePayload() })
     const r = await submit({ workflowType: "add-feature", workflowId: "returned-detail-read-model", projectRoot: dir,
       stage: "02-big-picture-event-storm", summary: longSummary,
-      sections: { "战略事件风暴": "### 事件时间线\n店铺详情已返回（读模型，非领域事件），同时页面查看已记录（领域事件）。" } })
+      sections: { "战略事件风暴": "### 事件时间线\n账户详情已返回（读模型，非领域事件），同时账户已冻结（领域事件）。" } })
     assert.ok(!r.findings.some((f) => f.code === "STRATEGIC_EVENT_NOT_STATE_CHANGE"))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
 })
 
-test("strategic event storm rejects an arrow timeline that disguises query completion as an event", async () => {
+test("strategic event storm rejects a query completion disguised in an arrow timeline", async () => {
   const dir = await freshProject()
   try {
-    await initialize({ workflowType: "add-feature", workflowId: "arrow-query-event", projectRoot: dir, title: "t", request: "新增访问轨迹" })
+    await initialize({ workflowType: "add-feature", workflowId: "arrow-query-event", projectRoot: dir, title: "t", request: "新增审核摘要查询" })
     await submit({ workflowType: "add-feature", workflowId: "arrow-query-event", projectRoot: dir,
       stage: "01-current-evidence", summary: longSummary, ...baselinePayload() })
     const r = await submit({ workflowType: "add-feature", workflowId: "arrow-query-event", projectRoot: dir,
       stage: "02-big-picture-event-storm", summary: longSummary,
-      sections: { "战略事件风暴": "### 事件时间线\n[用户] → (查询一日轨迹) → **一日轨迹已查询(DailyTrailQueried)**" } })
+      sections: { "战略事件风暴": "### 事件时间线\n[审核员] → 查询审核摘要 → 领域事件：审核摘要已返回" } })
     assert.ok(r.findings.some((f) => f.code === "STRATEGIC_EVENT_NOT_STATE_CHANGE"))
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -1902,7 +1967,7 @@ test("strategic event storm does not hide technical design behind current or fut
   assert.ok(!leaks.some((finding) => finding.path.endsWith("战略事件风暴")))
 })
 
-test("human milestone cannot be submitted with placeholder sections", async () => {
+test("a business stage cannot publish an incomplete independent artifact", async () => {
   const dir = await freshProject()
   try {
     await initialize({ workflowType: "add-feature", workflowId: "placeholder", projectRoot: dir, title: "t", request: "新增访问轨迹" })
@@ -1911,7 +1976,7 @@ test("human milestone cannot be submitted with placeholder sections", async () =
     const r = await submit({ workflowType: "add-feature", workflowId: "placeholder", projectRoot: dir,
       stage: "02-big-picture-event-storm", summary: longSummary,
       sections: { "战略事件风暴": "用户发起业务动作，业务规则生效并形成可观察结果。" } })
-    assert.ok(r.findings.some((f) => f.code === "MILESTONE_DOCUMENT_INCOMPLETE" && f.severity === "blocking"))
+    assert.ok(r.findings.some((f) => f.code === "STAGE_OWNED_SECTIONS_INCOMPLETE" && f.severity === "blocking"))
     assert.equal(r.requiredAction, "continue")
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -2140,6 +2205,53 @@ test("lifecycle complete-stage publishes all sections in one model call", async 
   }
 })
 
+test("lifecycle normalizes heading-content arrays and can repair a saved draft", async () => {
+  const dir = await freshProject()
+  const context = {
+    sessionID: "array-section-session", messageID: "message", agent: "ddd-workflow",
+    directory: dir, worktree: dir, abort: new AbortController().signal,
+    metadata() {}, async ask() {},
+  }
+  try {
+    await dddLifecycleTool.execute({
+      action: "init", workflow_type: "add-feature", workflow_id: "array-sections",
+      input: { title: "数组章节测试", request: "为现有系统新增访问轨迹查询能力" },
+    }, context)
+    const first = JSON.parse(await dddLifecycleTool.execute({
+      action: "complete-stage", input: { summary: longSummary },
+    }, context))
+    assert.equal(first.draft.saved, true)
+
+    const fact = "当前店铺详情缺失时返回“店铺不存在”错误结果，该既有业务入口已通过自动化测试验证。"
+    const topology = "HMDP 当前为单体应用，未拆分微服务。"
+    const constraint = "必须保持既有业务入口的可观察行为兼容。"
+    const repaired = JSON.parse(await dddLifecycleTool.execute({
+      action: "complete-stage",
+      input: {
+        sections: [
+          {
+            heading: "输入场景与现状事实",
+            content: `${fact}\n\n${topology}\n\n事实、假设与待确认项已经分开记录；可执行验收约束只保护已有行为。`,
+          },
+          {
+            heading: "证据与追踪",
+            content: `${constraint}\n\n现状代码证据索引与验证基线已经建立；OpenSpec历史战略基线当前为空。`,
+          },
+        ],
+        observations: [
+          { heading: "输入场景与现状事实", kind: "current-behavior-fact", statement: fact, evidence_refs: ["test:baseline"] },
+          { heading: "输入场景与现状事实", kind: "current-topology-fact", statement: topology, evidence_refs: ["test:baseline"] },
+          { heading: "证据与追踪", kind: "compatibility-constraint", statement: constraint, evidence_refs: ["request:00-request"] },
+        ],
+      },
+    }, context))
+    assert.equal(repaired.lastCompletedStage, "01-current-evidence", JSON.stringify(repaired, null, 2))
+    assert.equal(repaired.nextStage, "02-big-picture-event-storm")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test("plugin replaces evidence-stage repository exploration with one bundle", async () => {
   const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
   const sessionID = "budget-test"
@@ -2304,7 +2416,7 @@ test("review runtime failures return a self-contained stop contract instead of i
       input: { title: "人工门错误合同", request: "新增访问轨迹" } }, context)
     await completeMilestoneI(dir, "review-contract")
     const document = path.join(dir, "openspec", "changes", "review-contract", "ddd", "I-strategic-eventstorm.md")
-    await writeFile(document, (await readFile(document, "utf8")).replace("## 一页结论", "## 一页结论\n\n_待填写_"), "utf8")
+    await writeFile(document, (await readFile(document, "utf8")).replace("## 一、本阶段结论", "## 一、本阶段结论\n\n_待填写_"), "utf8")
     const result = JSON.parse(await dddLifecycleTool.execute({
       action: "review", input: { decision: "approve", reviewer: "human" },
     }, context))
@@ -2349,7 +2461,7 @@ test("evidence bundle returns bounded cited excerpts and OpenSpec index", async 
     await writeFile(path.join(dir, "README.md"), "# Shop\n\n用户自有数据必须通过 JsonFileStore 持久化。\n", "utf8")
     await mkdir(path.join(dir, "openspec", "specs", "current-shop"), { recursive: true })
     const packet = await evidenceBundle(dir, "new-change", ["Shop", "queryShop"])
-    assert.equal(packet.schemaVersion, "ddd-evidence-bundle/v1")
+    assert.equal(packet.schemaVersion, "ddd-evidence-bundle/v2")
     assert.equal(packet.matches[0].file, "src/ShopService.java")
     assert.match(packet.matches[0].excerpts[0].ref, /^code:src\/ShopService\.java#L\d+-L\d+$/u)
     assert.ok(packet.requiredCoverage.includes("事实、假设与待确认项"))
@@ -2360,6 +2472,20 @@ test("evidence bundle returns bounded cited excerpts and OpenSpec index", async 
     assert.deepEqual(packet.openSpecIndex.currentSpecs, ["current-shop"])
     assert.equal(packet.openSpecIndex.statement,
       "OpenSpec 索引显示：当前正式 specs 为 `current-shop`；历史活动 changes 为空。")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("evidence bundle does not promote sample README advice to a mandatory compatibility contract", async () => {
+  const dir = await freshProject()
+  try {
+    await writeFile(path.join(dir, "README.md"), [
+      "# Sample",
+      "Unit tests are a must for any business application, regardless of its complexity and size. Therefore, to demonstrate JUnit, sample tests were implemented.",
+    ].join("\n"), "utf8")
+    const packet = await evidenceBundle(dir, "sample-advice", ["Unit", "tests"])
+    assert.deepEqual(packet.mandatoryCompatibilityConstraints, [])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -2404,6 +2530,48 @@ test("tactical design must trace mandatory repository compatibility constraints"
       dir, "context-tactical-design", "收藏仓储通过 JsonFileStore 持久化并保持既有测试隔离约束。",
     )
     assert.deepEqual(covered, [])
+
+    await writeFile(path.join(workbench, "evidence-snapshot.json"), JSON.stringify({
+      mandatoryCompatibilityConstraints: [{
+        ref: "code:README.md#L57-L57",
+        text: "L57: The DATABASE_URL is provided by App Platform and is required if DEVELOPMENT_MODE is False.",
+      }],
+    }), "utf8")
+    const environmentCovered = await validateMandatoryCompatibilityConstraints(
+      dir, "delivery-planning", "部署与回滚必须保留 DATABASE_URL；当 DEVELOPMENT_MODE 为关闭状态时由部署环境注入。",
+    )
+    assert.deepEqual(environmentCovered, [])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("runtime-compiled delivery gate failure enters durable runtime block instead of a model repair loop", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "compiled-delivery-block"
+    await initialize({ workflowType: "refactor-system", workflowId, projectRoot: dir, title: "t", request: "保持行为重构遗留系统" })
+    const root = path.join(dir, "openspec", "changes", workflowId, "ddd")
+    const stateFile = path.join(root, ".ddd", "workflow-state.json")
+    const state = JSON.parse(await readFile(stateFile, "utf8"))
+    state.checkpoints.push({ checkpointId: 4, stage: "06-pilot-tactical-design", milestone: "IV", summary: longSummary,
+      status: "approved", review: { decision: "approve", reviewer: "tester", reviewedAt: new Date().toISOString(), feedback: "" },
+      reviewChecklist: [], adviceRequired: false, document: "milestoneIV", completedAt: new Date().toISOString() })
+    state.currentStage = "06-pilot-tactical-design"
+    state.deliveryPlan = { source: "structured-openspec-plan", sliceIds: ["S1"], dependencies: { S1: [] }, completedSliceIds: [] }
+    await writeFile(stateFile, JSON.stringify(state), "utf8")
+
+    const result = await submit({ workflowType: "refactor-system", workflowId, projectRoot: dir,
+      stage: "07-migration-roadmap", summary: longSummary, plannedSlices: 1, runtimeCompiled: true,
+      sections: { "交付范围": "运行时编译的交付范围。" } })
+    assert.equal(result.workflowStatus, "runtime_blocked")
+    assert.equal(result.requiredAction, "stop")
+    assert.equal(result.draft.saved, false)
+    assert.equal(result.draft.retryableByModel, false)
+    assert.equal(result.draft.mustStop, true)
+    const blocked = await status({ workflowType: "refactor-system", workflowId, projectRoot: dir, view: "full" })
+    assert.equal(blocked.state.status, "runtime_blocked")
+    assert.equal(blocked.state.runtimeBlock.stage, "07-migration-roadmap")
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -2435,7 +2603,7 @@ test("submit advances to next stage and writes document sections", async () => {
     })
     assert.equal(r.findings.filter((f) => f.severity === "blocking").length, 0)
     assert.equal(r.nextStage, "02-big-picture-event-storm")
-    const doc = await readFile(path.join(dir, "openspec", "changes", "s1", "ddd", "I-strategic-eventstorm.md"), "utf8")
+    const doc = await readFile(path.join(dir, "openspec", "changes", "s1", "ddd", ".ddd", "stages", "01-current-evidence.md"), "utf8")
     assert.ok(doc.includes("当前系统的既有业务入口已通过测试验证"))
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -2508,9 +2676,18 @@ test("human gate: submit then review approve advances", async () => {
     const s = await status({ workflowType: "add-feature", workflowId: "g1", projectRoot: dir, view: "compact" })
     assert.equal(s.humanReviewRequired, true)
     assert.equal(s.requiredAction, "await-human-review")
+    assert.equal(s.lastCompletedStage, "milestone-I-summary")
+    const root = path.join(dir, "openspec", "changes", "g1", "ddd")
+    const eventStage = await readFile(path.join(root, ".ddd", "stages", "02-big-picture-event-storm.md"), "utf8")
+    assert.doesNotMatch(eventStage, /^## 一页结论$/mu)
+    const reviewDocument = await readFile(path.join(root, "I-strategic-eventstorm.md"), "utf8")
+    assert.match(reviewDocument, /^## 一、本阶段结论$/mu)
+    assert.match(reviewDocument, /\.ddd\/stages\/01-current-evidence.md/u)
+    assert.match(reviewDocument, /\.ddd\/stages\/02-big-picture-event-storm.md/u)
+    assert.doesNotMatch(reviewDocument, /来源阶段：/u)
     const r = await review({
       workflowType: "add-feature", workflowId: "g1", projectRoot: dir,
-      stage: "02-big-picture-event-storm", decision: "approve", reviewer: "tester",
+      stage: "milestone-I-summary", decision: "approve", reviewer: "tester",
       resolution: { selectedCandidateId: "candidate-a", resolvedDecisions: ["触发条件"] },
     })
     assert.equal(r.reviewRecord.decision, "approve")
@@ -2623,7 +2800,6 @@ test("review revise bypasses approval validation and a corrected resubmit restor
     const resubmitted = await submit({ workflowType: "add-feature", workflowId: "rv-invalid", projectRoot: dir,
       stage: "02-big-picture-event-storm", summary: longSummary,
       sections: {
-        "一页结论": "当前结论基于系统级业务事件流，不包含任何技术实现决策。",
         "战略事件风暴": "候选场景 A：参与者发起业务动作后形成候选业务事件。\n候选场景 B：外部业务事实到达后形成另一条候选事件流。\n人工确认前，任何候选均不进入本次目标或主流程。",
       },
       ambiguityResolution: {
@@ -2655,7 +2831,7 @@ test("formal document normalizes double-escaped newlines before publication", as
         },
       }) })
     assert.equal(r.findings.filter((f) => f.severity === "blocking").length, 0)
-    const doc = await readFile(path.join(dir, "openspec", "changes", "newlines", "ddd", "I-strategic-eventstorm.md"), "utf8")
+    const doc = await readFile(path.join(dir, "openspec", "changes", "newlines", "ddd", ".ddd", "stages", "01-current-evidence.md"), "utf8")
     assert.ok(doc.includes("### 事实\n当前系统的第一条事实已经被测试验证。"))
     assert.ok(!doc.includes("\\n"))
   } finally {
@@ -2724,15 +2900,18 @@ test("plugin rejects generic writes to formal milestone and OpenSpec planning ar
   await plugin["command.execute.before"]({ command: "ddd", sessionID }, {})
   for (const filePath of [
     "openspec/changes/c1/ddd/I-strategic-eventstorm.md",
+    "openspec/changes/c1/ddd/.ddd/stages/08-implementation.md",
     "openspec/changes/c1/proposal.md",
     "openspec/changes/c1/specs/visit-trail/spec.md",
     "openspec/changes/c1/design.md",
     "openspec/changes/c1/tasks.md",
   ]) {
+    const args = { filePath }
     await assert.rejects(
-      plugin["tool.execute.before"]({ tool: "write", sessionID, callID: filePath }, { args: { filePath } }),
+      plugin["tool.execute.before"]({ tool: "write", sessionID, callID: filePath }, { args }),
       /DDD_FORMAL_ARTIFACT_WRITE_DENIED/,
     )
+    assert.equal(args.filePath, path.resolve(process.cwd()))
   }
   await assert.rejects(
     plugin["tool.execute.before"]({ tool: "Edit", sessionID, callID: "mobile-title-case" },
@@ -2782,6 +2961,29 @@ test("final review stays behind implementation when planned slices are unknown",
   }
 })
 
+test("completed implementation slices advance deterministically to model review", async () => {
+  const dir = await freshProject()
+  try {
+    const workflowId = "completed-slices"
+    await initialize({ workflowType: "refactor-system", workflowId, projectRoot: dir, title: "t", request: "保持行为重构遗留系统" })
+    const stateFile = path.join(dir, "openspec", "changes", workflowId, "ddd", ".ddd", "workflow-state.json")
+    const state = JSON.parse(await readFile(stateFile, "utf8"))
+    state.checkpoints.push({ checkpointId: 2, stage: "08-implementation", milestone: "VI", summary: longSummary,
+      status: "completed", review: null, reviewChecklist: [], adviceRequired: false, document: "milestoneVI",
+      completedAt: new Date().toISOString(), sliceId: "S1" })
+    state.currentStage = "08-implementation"
+    state.deliveryPlan = { source: "structured-openspec-plan", sliceIds: ["S1"], dependencies: { S1: [] }, completedSliceIds: ["S1"] }
+    await writeFile(stateFile, JSON.stringify(state), "utf8")
+    const result = await status({ workflowType: "refactor-system", workflowId, projectRoot: dir })
+    assert.equal(result.nextStage, "09-model-review")
+    assert.deepEqual(result.allowedNextStages, ["09-model-review"])
+    assert.equal(result.requiredAction, "continue")
+    assert.equal(result.humanReviewRequired, false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test("implementation submission rejects an unverifiable commit", async () => {
   const dir = await freshProject()
   try {
@@ -2819,9 +3021,9 @@ test("tactical required-content gate accepts framework-equivalent signatures", (
   assert.equal(containsRequiredConcept(text, "公开接口与 DTO 契约"), true)
 })
 
-test("tactical event semantics reject query-return events in Chinese and English", () => {
-  const text = "QueryDailyTrail 命令 → 事件 DailyTrailReturned(userId, date) → 读模型。\n查询轨迹 → 领域事件：轨迹已返回。\n查询一日轨迹 → 🟧一日轨迹已生成 → 🟪轨迹列表。\n记录查看 → 事件 PageViewRecorded。"
-  assert.deepEqual(queryPseudoEvents(text), ["轨迹已返回", "DailyTrailReturned", "一日轨迹已生成"])
+test("tactical event semantics reject query-return events across business domains", () => {
+  const text = "QueryAccountSummary 命令 → 事件 AccountSummaryLoaded(userId) → 读模型。\n查询库存列表 → 领域事件：库存列表已返回。\n记录扣款 → 事件 PaymentCaptured。"
+  assert.deepEqual(queryPseudoEvents(text), ["库存列表已返回", "AccountSummaryLoaded"])
 })
 
 test("tactical event storm rejects concrete database uniqueness mechanisms", () => {
@@ -2839,18 +3041,18 @@ test("tactical event storm rejects concrete database uniqueness mechanisms", () 
   assert.ok(findings.some((finding) => finding.code === "TACTICAL_EVENTSTORM_IMPLEMENTATION_LEAK"))
 })
 
-test("tactical design derives automatic-trigger constraints from approved human decisions", () => {
+test("tactical design derives automatic-trigger constraints from approved decisions without domain-specific paths", () => {
   const findings = validateStageSemantics(
     {
-      originalRequest: "新增用户一日光顾店铺轨迹功能",
+      originalRequest: "新增账户详情访问审计功能",
       checkpoints: [{
-        status: "approved", summary: "仅商铺详情页访问触发记录。",
-        review: { feedback: "批准候选A：仅详情页访问触发，同日同店去重。" },
+        status: "approved", summary: "每次账户详情成功返回后记录审计事实。",
+        review: { feedback: "批准候选A：由既有账户详情成功路径自动记录。" },
       }],
       humanDecisions: [],
     },
     { id: "06-tactical-design", scopeContract: { id: "context-tactical-design" } },
-    { summary: "战术设计", sections: { "公开接口与 DTO 契约": "详情成功后调用记录服务；另提供 POST /trail/visit 触发记录。" } },
+    { summary: "战术设计", sections: { "公开接口与 DTO 契约": "账户详情成功返回后调用记录服务；另提供 POST /audit/record 触发记录。" } },
   )
   assert.ok(findings.some((finding) => finding.code === "TACTICAL_DUPLICATE_EXTERNAL_TRIGGER"))
 })
@@ -2866,11 +3068,11 @@ test("delivery milestone is deterministically compiled from plan and approved in
   assert.match(compiled.sections["证据与追踪"], /确定性编译/u)
 })
 
-test("tactical design rejects a second public capture trigger for automatic recording", () => {
+test("tactical design rejects a second public mutation trigger for an approved automatic side effect", () => {
   const findings = validateStageSemantics(
-    { originalRequest: "用户每次成功查看店铺详情时记录一次事实" },
+    { originalRequest: "每次成功生成对账结果时记录一条审计事实" },
     { id: "06-tactical-design", scopeContract: { id: "context-tactical-design" } },
-    { summary: "战术设计", sections: { "模块与分层设计": "详情成功返回后调用记录服务；另提供 POST /shop/{id}/view 触发记录。" } },
+    { summary: "战术设计", sections: { "模块与分层设计": "对账成功返回后调用记录服务；另提供 POST /audit/append 触发记录。" } },
   )
   assert.ok(findings.some((finding) => finding.code === "TACTICAL_DUPLICATE_EXTERNAL_TRIGGER"))
 })

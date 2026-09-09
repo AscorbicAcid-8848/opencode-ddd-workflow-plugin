@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.20",
+  "schemaVersion": "1.21",
   "profiles": {
     "add-feature": {
       "title": "Bottom-up DDD Feature Delivery",
@@ -7,6 +7,7 @@
       "artifactBase": "openspec/changes",
       "artifactSubdir": "ddd",
       "artifactLanguage": "zh-CN",
+      "runtimeMilestoneSummaries": true,
       "designConformanceContract": true,
       "strategicBaselineContract": true,
       "stages": [
@@ -454,6 +455,7 @@
       "artifactBase": "openspec/changes",
       "artifactSubdir": "ddd",
       "artifactLanguage": "zh-CN",
+      "runtimeMilestoneSummaries": true,
       "designConformanceContract": true,
       "strategicBaselineContract": true,
       "stages": [
@@ -896,6 +898,7 @@
       "artifactBase": "openspec/changes",
       "artifactSubdir": "ddd",
       "artifactLanguage": "zh-CN",
+      "runtimeMilestoneSummaries": true,
       "designConformanceContract": true,
       "stages": [
         {

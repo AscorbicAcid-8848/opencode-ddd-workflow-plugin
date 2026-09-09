@@ -68,7 +68,7 @@ export function visualCards(item: WorkflowItem, view: MilestoneView, index: numb
   return cards
 }
 
-export function decisionText(view: MilestoneView): string {
+export function decisionText(view: MilestoneView, language: "zh" | "en" = "zh"): string {
   const items = view.checkpoint?.decisionItems ?? []
-  return items.length ? items.map(d => `${d.id} [${d.status}] ${d.question}\n${d.options.map(o => `  ${o.id} ${o.label}${o.id === d.recommendationId ? "（推荐）" : ""}${o.id === d.selectedOptionId ? "（已选）" : ""}${o.impact ? `：${o.impact}` : ""}`).join("\n")}\n影响：${d.blocks.map(b => b.statement).join("；")}`).join("\n\n") : clean(view.sections["本次请您确认"] ?? "没有记录结构化待决事项；请阅读当前正文与验收清单。")
+  return items.length ? items.map(d => `${d.question}\n${d.options.map(o => `  ${o.label}${o.id === d.recommendationId ? (language === "en" ? " (Recommended)" : "（推荐）") : ""}${o.id === d.selectedOptionId ? (language === "en" ? " (Selected)" : "（已选）") : ""}${o.impact ? `：${o.impact}` : ""}`).join("\n")}\n${language === "en" ? "Impact: " : "影响："}${d.blocks.map(b => b.statement).join("；")}`).join("\n\n") : clean(view.sections["本次请您确认"] ?? (language === "en" ? "No structured decisions recorded. Read the document and checklist." : "没有记录结构化待决事项；请阅读当前正文与验收清单。"))
 }

@@ -15,8 +15,8 @@ typed submission envelope. v2 keeps the parts that matter and drops the parts th
 models up:
 
 - **One tool**: `ddd_lifecycle` with a compact lifecycle action set.
-- **One-call stage submit**: `complete-stage` accepts `{ stage, summary, sections }` — Markdown section content, no
-  items/relations/deferredItems graph.
+- **One-call stage submit**: `complete-stage` accepts `{ stage, summary, sections }`; every Arabic-numbered stage owns one independent document.
+- **Runtime milestone summary**: after the last business stage of a milestone, TypeScript deterministically compiles its stage documents into one fixed Roman I–VI review document. Business stages cannot edit that document.
 - **Structured OpenSpec compiler**: `openspec-plan` accepts business requirements and vertical slices; TypeScript generates proposal, Delta Specs, design, tasks, and `roadmap.json`.
 - **Focused hard gates**: legal stage order, complete human documents, intent preservation,
   intrinsic stage scope, real implementation Commit and honest runtime blocking.
@@ -51,8 +51,7 @@ Copy `skills/ddd-orchestrate/SKILL.md` into your skills directory, or load it vi
 ```
 
 The model routes the request, calls `ddd_lifecycle(init)`, then loops
-`prepare → bounded work → complete-stage` until a human gate, where it presents the review checklist and
-waits for 批准/修改/拒绝.
+`prepare → bounded work → complete-stage`. Each call publishes only the current machine-facing stage document under `.ddd/stages/`. At the end of a milestone the runtime adds a separate summary checkpoint, compiles the Roman review document, presents the review checklist, and waits for 批准/修改/拒绝.
 
 ### Example tool calls
 
@@ -78,8 +77,7 @@ Complete one stage atomically:
 
 Review:
 ```json
-{ "action": "review", "input": { "stage": "02-big-picture-event-storm",
-  "decision": "approve", "reviewer": "pm",
+{ "action": "review", "input": { "decision": "approve", "reviewer": "pm",
   "resolution": { "selectedCandidateId": "browse-trigger" } } }
 ```
 
@@ -93,7 +91,7 @@ src/
   engine.ts     init/prepare/submit/review/status/archive/openspec
   transition.ts state-machine transition logic (linear + human gates + repeatable + backtrack)
   catalog.ts    loads workflow-profiles.json
-  documents.ts  milestone skeleton + section publishing
+  documents.ts  independent stage artifacts + deterministic Roman milestone summaries
   openspec.ts   OpenSpec CLI integration
   delivery-plan.ts structured plan validation and OpenSpec/roadmap compilation
   state.ts      workflow-state.json load/save
@@ -114,6 +112,22 @@ tests/engine.test.mjs             state-machine tests
 | `refactor-system` | `01-refactoring-scope-convergence` | I, II, III, IV, V, VI |
 | `create-system` | `01-system-scenarios` | I, II, III, IV, V, VI |
 
-Each workflow = one OpenSpec change at `openspec/changes/<workflow-id>/ddd/` with six
-milestone documents (I–VI), a `.ddd/workflow-state.json`, and standard OpenSpec
-proposal/specs/design/tasks generated at milestone V.
+Each workflow = one OpenSpec change at `openspec/changes/<workflow-id>/ddd/` with:
+
+```text
+ddd/
+├── .ddd/
+│   ├── stages/                    # machine-facing Arabic stage artifacts
+│   │   ├── 00-request.md
+│   │   ├── 01-....md
+│   │   └── 02-....md
+│   └── workflow-state.json
+├── I-strategic-eventstorm.md       # runtime-owned human review summary
+├── II-strategic-design.md
+├── III-tactical-eventstorm.md
+├── IV-tactical-design.md
+├── V-delivery-plan.md
+└── VI-implementation-acceptance.md
+```
+
+Standard OpenSpec proposal/specs/design/tasks are generated at milestone V. The model may write neither `.ddd/stages/*.md` nor Roman milestone files directly; both are atomically published through lifecycle transactions. The hidden `.ddd` area is machine state and incremental evidence; only the Roman documents at `ddd/` root are intended for human review.
