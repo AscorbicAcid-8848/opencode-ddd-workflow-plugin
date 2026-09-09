@@ -20,8 +20,7 @@ models up:
 - **Structured OpenSpec compiler**: `openspec-plan` accepts business requirements and vertical slices; TypeScript generates proposal, Delta Specs, design, tasks, and `roadmap.json`.
 - **Focused hard gates**: legal stage order, complete human documents, intent preservation,
   intrinsic stage scope, real implementation Commit and honest runtime blocking.
-- **Bounded execution**: evidence and implementation stages reject subagent fan-out,
-  repeated exploration, command churn and temporary tool downloads.
+- **Scoped execution**: modeling allows targeted read-only evidence gathering; coding follows approved slices and host permissions, without fixed tool-call quotas. Semantic lint is advisory; state transitions, explicit decisions and real evidence remain hard gates.
 - **Small runtime**: ~1.5k lines of TypeScript vs ~450 KB.
 
 ## Install
@@ -45,6 +44,11 @@ Copy `skills/ddd-orchestrate/SKILL.md` into your skills directory, or load it vi
 `skill` tool when starting a workflow.
 
 ## Usage
+
+The plugin does not register dedicated agents or override the selected session agent.
+Use `/ddd` for modeling and workflow continuation, `/ddd-code` for approved coding,
+`/ddd-status` for read-only status, and `/ddd-workflow` for the TUI panel.
+Stage permissions and human review gates remain enforced by the lifecycle runtime.
 
 ```
 /ddd 为现有系统新增用户到店预约功能
@@ -87,7 +91,7 @@ Delivery planning uses structured data rather than model-authored OpenSpec Markd
 
 ```
 src/
-  index.ts      Native SDK tools, commands, agents, and guards
+  index.ts      Native SDK tools, slash commands, and stage guards
   engine.ts     init/prepare/submit/review/status/archive/openspec
   transition.ts state-machine transition logic (linear + human gates + repeatable + backtrack)
   catalog.ts    loads workflow-profiles.json

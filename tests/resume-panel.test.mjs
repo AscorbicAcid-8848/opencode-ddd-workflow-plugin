@@ -33,6 +33,7 @@ test('continue existing or new session sends explicit workflow intent, never app
   assert.equal(await resumeInSession(f.item, 'other', f.client), 'other')
   assert.match(f.calls[0].parts[0].text, /workflow_id="example"/)
   assert.match(f.calls[0].parts[0].text, /不得自行 review/)
+  assert.equal(f.calls[0].agent, undefined)
   assert.equal(await resumeInSession(f.item, null, f.client), 'new')
   assert.equal(f.calls[1], 'create')
   assert.equal(await readFile(f.file, 'utf8'), before)

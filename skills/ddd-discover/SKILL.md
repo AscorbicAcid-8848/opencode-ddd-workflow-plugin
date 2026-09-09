@@ -38,7 +38,7 @@ Present each journey separately inside the existing event-storm section: a short
 
 - A reviewer can explain how the selected business goal is achieved, where responsibility changes, and where the result can differ. A list of isolated `command → event` pairs is not sufficient for a multi-step journey.
 - Every recommendation separates observation, interpretation and expected benefit. A framework base class proves neither the absence of business rules nor that a proposed extraction will remove coupling. Support comparative risk and benefit claims with observed responsibilities/dependencies; otherwise label them hypotheses and identify the evidence that would change the recommendation.
-- When evidence cannot support the proposed journey, expose its missing segments and recommend bounded evidence recovery before approving the affected boundary or pilot. Do not promote uncertain events into the confirmed main flow. Obey the runtime budget; this instruction does not authorize extra tools or bypass a gate.
+- When evidence cannot support the proposed journey, expose its missing segments and recommend bounded evidence recovery before approving the affected boundary or pilot. Do not promote uncertain events into the confirmed main flow. Use targeted read-only evidence gathering without bypassing a human gate.
 - Summaries state concrete business discoveries, consequences and remaining decisions, not “analysis completed” or artifact counts. Keep them in the existing stage sections; the runtime still owns the Roman review document.
 
 ### Consistent decisions and evidence deadlines

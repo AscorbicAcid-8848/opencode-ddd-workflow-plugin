@@ -41,6 +41,7 @@ for (const decision of ['approve', 'revise', 'reject']) test(`panel ${decision} 
   assert.equal(result.alreadySent, true)
   assert.equal(f.sent.length, 1)
   assert.equal(f.sent[0].sessionID, 'ses_original')
+  assert.equal(f.sent[0].agent, undefined)
   assert.equal(f.sent[0].noReply, decision === 'reject')
   assert.equal(f.sent[0].parts[0].text, `${{approve:'批准',revise:'修改',reject:'拒绝'}[decision]}里程碑 I：补充异常流程`)
   assert.doesNotMatch(f.sent[0].parts[0].text, /workflowId|decisions|ddd_lifecycle|review/)
@@ -75,7 +76,7 @@ test('chat hook preserves feedback, attaches private context and prevents duplic
   assert.match(result.error, /DDD_REVIEW_ALREADY_SAVED/)
   assert.equal(await readFile(f.file, 'utf8'), before)
   await hooks['chat.message']({sessionID:'ses_original',agent:'ddd-workflow'}, {message:{id:'msg_query'},parts:[{type:'text',text:'当前到哪个检查点了'}]})
-  assert.equal(turnIntents.get('ses_original'), 'read-only')
+  assert.equal(turnIntents.get('ses_original'), 'pending')
   turnIntents.delete('ses_original')
 })
 test('busy session preserves review and allows delivery-only retry', async t => {

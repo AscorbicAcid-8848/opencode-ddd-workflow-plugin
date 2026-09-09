@@ -278,8 +278,8 @@ export async function evidenceBundle(projectRoot, workflowId, rawTerms, options 
             "mandatoryCompatibilityConstraints 必须逐项写为兼容性约束，后续设计不得降级为实施前可选核验。",
         ].join(""),
         requiredCoverage: ["事实、假设与待确认项", "工程约束与兼容性", "可执行验收约束", "现状代码证据索引", "验证基线", "OpenSpec历史战略基线"],
-        responseBudget: { totalSectionChars: "900-1600", observations: "4-6" },
-        nextAction: "依据本 bundle 直接调用 complete-stage；不要逐文件补读、不要先输出草稿或推理。",
+        responseBudget: { advisory: true, rule: "按业务决策所需证据组织内容，不按字数或事实数量凑配额。" },
+        nextAction: "检查业务旅程和兼容约束覆盖；必要时使用只读工具定向补充证据，引用真实位置，再 complete-stage。无法取得的证据明确记录缺口。",
     };
     const snapshot = {
         repositoryShape: topLevel,

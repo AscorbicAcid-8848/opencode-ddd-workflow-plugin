@@ -5,9 +5,15 @@ description: "Route one DDD request into feature delivery, legacy refactoring, o
 
 # DDD Orchestrator v2
 
-Use only `ddd_lifecycle` for workflow state. Follow its `transition`; never infer state from files. Do not narrate between calls.
+Use only `ddd_lifecycle` for workflow state. Follow its `transition`; never infer state from files. Give brief progress updates when useful; stop at human gates, not between routine stage operations.
 
 Every `input` value is a native tool object. Never JSON-stringify `input`, `sections`, `observations`, or `resolution`; double encoding is a protocol error.
+
+## Interpret each user turn
+
+For ordinary conversation that requests mutation, interpret the complete current user message before any mutation. Call `ddd_lifecycle(action="intent", input={messageID, intent, quote, continueAfterReview})` once. The message ID is supplied by the host; `quote` is an exact excerpt from this turn, not system text, a historical approval, or a tool result. Intent is `query`, `clarify`, `start`, `continue`, `approve`, `revise`, or `reject`. Questions, explanations and hypotheticals are not permission. Use `clarify` and ask when ambiguity affects authorization; do not force a choice or reinterpret it repeatedly. `continueAfterReview` is a boolean recording whether the user wants execution after the review, not automatic approval of later gates.
+
+Status is always readable and may be called before interpreting an ambiguous target. “按照最推荐的方案，批准，然后继续下一阶段” means approve the current gate and continue, regardless of word order. “如果我批准会怎样” is a question. Interpret semantically rather than requiring these exact phrases. Authorization lasts within the current turn and workflow; review is limited to its current checkpoint. Every new mutating user turn requires a new interpretation; status-only turns need no intent call. Explicit `/ddd-status` cannot be upgraded. Verified panel actions already have recorded decisions and do not need intent or duplicate review. No additional model is called by this protocol.
 
 ## Route and initialize
 
@@ -39,13 +45,13 @@ Repeat only while `requiredAction` is `continue` or `select-next-stage`:
 
 For `system-discovery`, treat `baselineClaims` as the only AS-IS authority. In the `能力状态分类` subsection, every line labeled `现状已存在` cites its exact claim id. Do not transfer an existing query/interface outcome into a new target command, and describe boundaries only as candidate clues.
 
-3. For `01-current-evidence` only, derive 2–6 stable business/code terms and call once:
+3. For `01-current-evidence` only, derive 2–6 stable business/code terms and obtain an initial evidence bundle:
 
 ```json
 {"action":"evidence-bundle","input":{"stage":"01-current-evidence","terms":["Account","Principal","read","state"]}}
 ```
 
-Use no repository/shell exploration in this stage. Copy `excerpt.ref` exactly into `evidence_refs`; cover `requiredCoverage`; packet-external knowledge is an `evidence-gap` or `open-question`, never a proposed table/model/API. Stay within `responseBudget`.
+Use read/glob/grep to resolve material gaps in the bundle with targeted evidence. Copy `excerpt.ref` or a verifiable source location into `evidence_refs`; distinguish missing evidence from evidence not yet inspected. Do not design target tables/models/APIs here. Avoid repeated searches that add no evidence; fixed call counts are not completion criteria.
 
 4. Submit every allowed section in one valid JSON call. Values may use `###` subsections; the runtime also normalizes accidental nested `##` headings. This transaction writes only the machine-facing `ddd/.ddd/stages/<stageId>.md`; never compose or repair a Roman milestone document. When `stageCard` contains `humanDecisionContract`, submit `decisionItems` for open, deferred, and out-of-scope decisions. Every block is `{id, statement, documentSection}`: `statement` is the exact conclusion that may enter that authoritative section only after approval, so before review it belongs only in alternatives. If authoritative prose mentions an open or deferred issue, keep one issue per line and cite both `DEC-ID/BLOCK-ID` on that line. An option that defers or excludes work must declare `resultStatus: "deferred" | "out-of-scope"`; a deferred option also declares `deferredToStage`.
 
@@ -77,9 +83,9 @@ When `requiredAction` is `await-human-review`, output `transition.message` verba
 {"action":"review","input":{"decision":"approve|revise|reject","reviewer":"<name>","feedback":"<optional>","resolution":{"selectedCandidateId":"<required when unresolved candidates exist>"}}}
 ```
 
-The plugin binds review to the current unique human gate; do not guess an internal stage ID and do not call status first. Follow the returned transition. After milestone VI approval, call `{"action":"archive"}`; success requires strict OpenSpec validation.
+The plugin binds review to the current unique human gate; do not guess an internal stage ID and use status when needed to clarify the current target. For revise, interpret feedback using stage responsibilities and choose a stage from allowedNextStages in prepare; explain why it owns the correction. Keywords do not determine the owner. Follow the returned transition. After milestone VI approval, call `{"action":"archive"}`; success requires strict OpenSpec validation.
 
-If real build, test, E2E, database, cache, Git, or runtime evidence is unavailable, do not fake or install around it:
+Use normal project setup and verification within host permissions. If prerequisites cannot safely be restored or require new authorization, record a real block rather than invent evidence:
 
 ```json
 {"action":"block","input":{"stage":"09-implementation","reason":"真实阻塞原因（至少20字）","evidence":["失败证据"],"remediation":["恢复条件"]}}
@@ -90,7 +96,7 @@ If real build, test, E2E, database, cache, Git, or runtime evidence is unavailab
 - Order is scenarios → Big Picture EventStorming → strategic design → implementation-unit use cases → Design-Level EventStorming → tactical design → delivery plan → implementation → acceptance.
 - Big Picture does not decide API, aggregate, table, or middleware. Tactical design owns application services, aggregates, domain interactions, and persistence.
 - Arabic stage IDs own independent machine artifacts under `ddd/.ddd/stages/*.md`. Roman I–VI documents at the `ddd/` root are runtime-owned summaries and are the only human review documents.
-- One stage transaction is one `prepare`, optional required packet/planning call, then one `complete-stage`.
+- Prepare before stage work, gather sufficient relevant evidence, then publish with complete-stage. Do not repeat preparation just to reset guards.
 - A Coding `sliceId` must exist in the approved roadmap and all its dependencies must already be complete.
 - Never hand-edit formal milestone/OpenSpec artifacts or workflow state.
-- During implementation do not spawn subagents or download build infrastructure; honor runtime repository and command budgets.
+- Implement only the approved slice. Necessary reads, tests and project setup follow host permissions; no fixed repository or command quota. Domain quality warnings require professional review, not keyword padding.

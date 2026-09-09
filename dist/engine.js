@@ -193,7 +193,7 @@ export function validateHumanDecisionContract(state, stage, sections, decisionIt
                 const optionText = `${option.label}\n${option.impact ?? ""}`;
                 if (OPTION_DEFERRAL_LANGUAGE.test(optionText) && !option.resultStatus)
                     findings.push({
-                        code: "DECISION_OPTION_DISPOSITION_REQUIRED", path: `${base}.options[${optionIndex}].resultStatus`, severity: "blocking",
+                        code: "DECISION_OPTION_DISPOSITION_REQUIRED", path: `${base}.options[${optionIndex}].resultStatus`, severity: "warning",
                         message: "表示延期或排除的选项必须声明 resultStatus=deferred|out-of-scope；不能在批准后被默认关闭为 resolved。",
                     });
                 if (option.resultStatus === "deferred" && !option.deferredToStage)
@@ -238,7 +238,7 @@ export function validateHumanDecisionContract(state, stage, sections, decisionIt
             const canonicalStatement = canonicalDecisionText(block.statement);
             if (canonicalStatement.length >= 4 && authoritativeText.includes(canonicalStatement))
                 findings.push({
-                    code: "OPEN_DECISION_BLOCKED_TARGET_ASSERTED", path: `sections.${block.documentSection}`, severity: "blocking",
+                    code: "OPEN_DECISION_BLOCKED_TARGET_ASSERTED", path: `sections.${block.documentSection}`, severity: "warning",
                     message: `结论 ${block.id} 仍受 ${item.id} 阻塞，却已进入阶段摘要或权威正文：“${block.statement}”。批准前只能在运行时审核区或备选建议中展示。`,
                 });
         }
@@ -284,7 +284,7 @@ export function validateHumanDecisionContract(state, stage, sections, decisionIt
     const unboundEntries = decisionProseEntries.filter(({ line }) => items.some((item) => line.includes(item.id) && !item.blocks.some((block) => line.includes(block.id))));
     for (const [entryPath, entries] of groupDecisionEntries(unboundEntries))
         findings.push({
-            code: "DECISION_REFERENCE_WITHOUT_BLOCK_TARGET", path: entryPath, severity: "blocking",
+            code: "DECISION_REFERENCE_WITHOUT_BLOCK_TARGET", path: entryPath, severity: "warning",
             message: `正文引用了 decision id，却没有在同一行引用其具体 block target id：${entries.slice(0, 3).map((entry) => entry.line).join("；")}。`,
         });
     if (stage.scopeContract?.id === "system-discovery") {
@@ -294,7 +294,7 @@ export function validateHumanDecisionContract(state, stage, sections, decisionIt
                 && item.blocks.some((block) => line.includes(block.id))));
         for (const [entryPath, entries] of groupDecisionEntries(openOptionAssertions))
             findings.push({
-                code: "OPEN_DECISION_OPTION_ASSERTED", path: entryPath, severity: "blocking",
+                code: "OPEN_DECISION_OPTION_ASSERTED", path: entryPath, severity: "warning",
                 message: `正文虽然引用了 DEC-ID/BLOCK-ID，却已把开放决策的一个选项写成当前规则：${entries.slice(0, 3).map((entry) => entry.line).join("；")}。批准前只能写“待确认/候选”，选项与推荐只放在运行时审核区或建议区。`,
             });
         const resolvedDecisionIds = new Set((state.decisionLedger ?? [])
@@ -315,7 +315,7 @@ export function validateHumanDecisionContract(state, stage, sections, decisionIt
         });
         for (const [entryPath, entries] of groupDecisionEntries(untrackedTargetRules))
             findings.push({
-                code: "UNTRACKED_TARGET_BUSINESS_RULE", path: entryPath, severity: "blocking",
+                code: "UNTRACKED_TARGET_BUSINESS_RULE", path: entryPath, severity: "warning",
                 message: `战略事件风暴正文新增了没有权威来源的规范性业务规则：${entries.slice(0, 3).map((entry) => entry.line).join("；")}。若它不是原始需求的直接复述或带 FACT/COMPAT 的现状事实，必须登记为 DEC-ID/BLOCK-ID，并在人工批准前保持待确认。`,
             });
     }
@@ -340,7 +340,7 @@ export function validateExternalPartyEvidence(state, stage, sections) {
     return [{
             code: "STRATEGIC_EXTERNAL_PARTY_WITHOUT_BOUNDARY_EVIDENCE",
             path: "sections.证据与追踪",
-            severity: "blocking",
+            severity: "warning",
             message: `战略设计声明了系统边界外的参与方或上游，但没有提供 boundaryEvidence：${assertions.slice(0, 3).join("；")}。请求头、字段名或本地校验只能证明接口形态，不能证明存在外部系统。`,
             suggestion: "若确有外部参与方，在证据章节写明 boundaryEvidence: <用户输入/运行时调用/独立部署证据>；否则将其建模为当前单体内部身份能力。",
         }];
@@ -504,7 +504,7 @@ export async function prepare(input) {
             targetBusinessRuleAuthority: {
                 rule: "战略事件风暴只能发布三类业务结论：原始请求的直接复述、带 FACT/COMPAT 引用的现状事实、已由人工解决的上游决策。除此之外，异常结果、资格条件、所有权、幂等、时间、补偿、重试或范围取舍等规范性规则都必须登记为 decisionItems 的 DEC-ID/BLOCK-ID。",
                 openDecisionRule: "开放 DEC/BLOCK 在权威正文只能写成‘待确认/候选’，不得提前写入推荐选项；选项与建议仅进入运行时审核区或‘备选解释与建议’。",
-                failureMeaning: "违反时 complete-stage 返回 OPEN_DECISION_OPTION_ASSERTED 或 UNTRACKED_TARGET_BUSINESS_RULE；修正当前候选后重提，不推进状态。",
+                failureMeaning: "运行时对疑似措辞问题给出 advisory findings，不把关键词当成语义证明。模型须复核原始需求与决策来源，真实选择仍由当前人工里程碑批准。",
             },
         } : {}),
         unfilledSectionHeadings: milestoneMissing.filter((heading) => allowedSectionHeadings.includes(heading)),
@@ -1154,7 +1154,7 @@ export async function validateMandatoryCompatibilityConstraints(root, scopeId, c
         findings.push({
             code: "MANDATORY_COMPATIBILITY_CONSTRAINT_UNTRACED",
             path: "sections",
-            severity: "blocking",
+            severity: "warning",
             message: `现状证据中的强制工程约束尚未进入当前设计：${text}`,
             suggestion: `在当前阶段明确落实 ${ref || text}；不得降级为 Coding 前的可选核验项。`,
         });
@@ -1432,7 +1432,7 @@ export function validateStageSemantics(state, stage, input) {
     const findings = [];
     const entries = Object.entries(input.sections ?? {});
     const addFinding = (code, heading, terms, message) => findings.push({
-        code, path: `sections.${heading}`, severity: "blocking", message: `${message}：${terms.join("、")}。`,
+        code, path: `sections.${heading}`, severity: code === "OPENSPEC_CHANGE_ID_MISMATCH" ? "blocking" : "warning", message: `${message}：${terms.join("、")}。`,
     });
     if (stage.scopeContract?.id === "system-discovery") {
         const allowedEvidenceHeadings = new Set(["输入场景与现状事实", "证据与追踪"]);
@@ -1532,7 +1532,7 @@ export function validateStageSemantics(state, stage, input) {
         }
         const aggregateOrmMerge = [...designText.matchAll(/[^。；\n]{0,30}(?:聚合根\s*[+＋/]\s*(?:MyBatis|JPA|ORM|数据库实体)|(?:MyBatis|JPA|ORM)\s*(?:实体)?\s*[+＋/]\s*聚合根)[^。；\n]{0,30}/giu)].map((match) => match[0].trim());
         if (aggregateOrmMerge.length)
-            addFinding("TACTICAL_AGGREGATE_INFRASTRUCTURE_MERGE", "领域模型设计", aggregateOrmMerge, "聚合根是领域模型，不能同时充当 ORM 持久化实体；请分别定义领域模型与基础设施映射模型/适配器");
+            addFinding("TACTICAL_AGGREGATE_INFRASTRUCTURE_MERGE", "领域模型设计", aggregateOrmMerge, "请复核 ORM 映射是否侵入领域职责；是否使用独立映射模型由已批准的架构策略决定，不强制双模型");
         const original = state.originalRequest ?? "";
         const cardinalityClauses = requestedInvariantClauses(original, "cardinality")
             .filter((clause) => !invariantCoversClause(domainText, clause));
@@ -1553,7 +1553,7 @@ export function validateStageSemantics(state, stage, input) {
         const contextFirstLayers = [/(?:\bdomain\b|领域层)/iu, /(?:\bapplication\b|应用层)/iu,
             /(?:\binfrastructure\b|基础设施层)/iu, /(?:\binterfaces?\b|接口层|适配层)/iu];
         if (moduleText && !contextFirstLayers.every((pattern) => pattern.test(moduleText))) {
-            addFinding("TACTICAL_BOUNDED_CONTEXT_MODULE_INCOMPLETE", "模块与分层设计", ["domain/application/infrastructure/interfaces"], "新增限界上下文必须在同一 context-first 模块根下明确领域层、应用层、基础设施层和接口适配层，不能继续散落到全局 entity/service/mapper 包");
+            addFinding("TACTICAL_BOUNDED_CONTEXT_MODULE_INCOMPLETE", "模块与分层设计", ["domain/application/infrastructure/interfaces"], "请说明领域职责、用例编排和适配职责如何隔离；目录名称与物理分层服从项目架构决策，不强制四个目录");
         }
     }
     if (stage.scopeContract?.id === "delivery-planning") {

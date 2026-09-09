@@ -1,6 +1,5 @@
 ---
 description: 批准交付计划并实现 DDD 纵向切片
-agent: ddd-coding
 ---
 
-加载 `ddd-implementation`。$ARGUMENTS 是人工批准意见或实现要求。第一项工具调用必须是 `ddd_lifecycle`：若里程碑 V 待批准则调用 `action=review,input={}`，否则调用 `action=prepare,input={}`；在此之前禁止读取、搜索或执行 Git。运行时会自动绑定当前人工门并解析唯一下一阶段，不调用 status。严格按里程碑 V、model-contract.json 与纵向切片实现；每个切片必须真实测试、独立 Git commit、提交 implementation evidence，直到里程碑 VI 或真实阻塞。
+加载 `ddd-implementation`。根据本轮用户意图先完成授权；可用 `ddd_lifecycle(action=status)` 确认当前阶段。只有用户明确批准时，才提交包含 decision 与 reviewer 的 review，不因调用编码命令自动批准。已批准则 prepare 对应实现阶段，按里程碑 V 和纵向切片实现。允许必要的读取、测试和宿主权限内的项目准备；每个切片提供真实测试、Git commit 和实现证据，停在里程碑 VI 或真实阻塞。

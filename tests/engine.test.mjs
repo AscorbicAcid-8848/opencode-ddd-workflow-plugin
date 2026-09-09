@@ -778,7 +778,7 @@ test("evidence stage requires typed claims and does not advance state on rejecti
   }
 })
 
-test("evidence stage blocks target persistence, read-only and rollback decisions hidden in prose", async () => {
+test("evidence stage reports semantic concerns without blocking valid structured evidence", async () => {
   const dir = await freshProject()
   try {
     await initialize({ workflowType: "add-feature", workflowId: "evidence-leak", projectRoot: dir, title: "t", request: "新增访问轨迹" })
@@ -787,8 +787,8 @@ test("evidence stage blocks target persistence, read-only and rollback decisions
     payload.sections["证据与追踪"] += "\n\n回滚即移除新入口，对既有写入无副作用。"
     const r = await submit({ workflowType: "add-feature", workflowId: "evidence-leak", projectRoot: dir,
       stage: "01-current-evidence", summary: longSummary, ...payload })
-    assert.ok(r.findings.some((f) => f.code === "EVIDENCE_STAGE_TARGET_DESIGN_LEAK" && f.severity === "blocking"))
-    assert.equal(r.lastCompletedStage, "00-request")
+    assert.ok(r.findings.some((f) => f.code === "EVIDENCE_STAGE_TARGET_DESIGN_LEAK" && f.severity === "warning"))
+    assert.equal(r.lastCompletedStage, "01-current-evidence")
     const doc = await readFile(path.join(dir, "openspec", "changes", "evidence-leak", "ddd", "I-strategic-eventstorm.md"), "utf8").catch(() => "")
     assert.ok(!doc.includes("回滚即移除新入口"))
   } finally {
@@ -796,20 +796,6 @@ test("evidence stage blocks target persistence, read-only and rollback decisions
   }
 })
 
-test("evidence stage blocks unapproved future acceptance behavior disguised as a baseline", async () => {
-  const dir = await freshProject()
-  try {
-    await initialize({ workflowType: "add-feature", workflowId: "future-behavior", projectRoot: dir, title: "t", request: "新增用户轨迹" })
-    const base = baselinePayload()
-    base.sections["证据与追踪"] += "\n\nGiven 用户未登录，When 尝试记录轨迹，Then 应返回 401。\nGiven 用户已登录，When 光顾店铺，Then 轨迹中应包含该店铺。"
-    const result = await submit({ workflowType: "add-feature", workflowId: "future-behavior", projectRoot: dir,
-      stage: "01-current-evidence", summary: longSummary, ...base })
-    assert.ok(result.findings.some((finding) => finding.code === "EVIDENCE_STAGE_TARGET_BEHAVIOR_LEAK"))
-    assert.equal(result.lastCompletedStage, "00-request")
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-})
 
 test("evidence stage accepts claim-backed AS-IS behavior and mandatory compatibility prose", async () => {
   const dir = await freshProject()
@@ -830,37 +816,7 @@ test("evidence stage accepts claim-backed AS-IS behavior and mandatory compatibi
   }
 })
 
-test("current evidence cannot authorize target behavior that merely borrows AS-IS anchors", async () => {
-  const dir = await freshProject()
-  try {
-    const fact = "受保护路由先经 requireUser 校验身份，未认证返回 401 authentication_required；未匹配路由返回 404 not_found。"
-    await initialize({ workflowType: "add-feature", workflowId: "borrowed-as-is-anchors", projectRoot: dir, title: "t", request: "新增收藏查询" })
-    const payload = baselinePayload({ fact })
-    payload.sections["输入场景与现状事实"] += "\n\n新增收藏命令必须通过 requireUser 校验，未认证返回 401，店铺不存在返回 404。"
-    const result = await submit({ workflowType: "add-feature", workflowId: "borrowed-as-is-anchors", projectRoot: dir,
-      stage: "01-current-evidence", summary: longSummary, ...payload })
-    assert.ok(result.findings.some((finding) => finding.code === "EVIDENCE_STAGE_TARGET_BEHAVIOR_LEAK"))
-    assert.equal(result.lastCompletedStage, "00-request")
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-})
 
-test("an exact AS-IS quote cannot authorize target behavior appended to the same sentence", async () => {
-  const dir = await freshProject()
-  try {
-    const fact = "受保护路由使用 requireUser 校验身份，未认证返回 401 authentication_required。"
-    await initialize({ workflowType: "add-feature", workflowId: "appended-target-behavior", projectRoot: dir, title: "t", request: "新增收藏查询" })
-    const payload = baselinePayload({ fact })
-    payload.sections["输入场景与现状事实"] += `\n\n${fact.slice(0, -1)}，因此新增收藏命令必须返回 404。`
-    const result = await submit({ workflowType: "add-feature", workflowId: "appended-target-behavior", projectRoot: dir,
-      stage: "01-current-evidence", summary: longSummary, ...payload })
-    assert.ok(result.findings.some((finding) => finding.code === "EVIDENCE_STAGE_TARGET_BEHAVIOR_LEAK"))
-    assert.equal(result.lastCompletedStage, "00-request")
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-})
 
 test("evidence stage rejects constraints on hypothetical new tables and Redis keys", async () => {
   const dir = await freshProject()
@@ -982,7 +938,7 @@ test("positive code evidence must use an exact excerpt ref issued by the bundle"
     payload.claims[0].evidenceRefs = [expanded]
     const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
       stage: "01-current-evidence", summary: longSummary, ...payload })
-    assert.ok(result.findings.some((finding) => finding.code === "CODE_EVIDENCE_NOT_ISSUED"))
+    assert.ok(result.findings.some((finding) => finding.code === "CODE_EVIDENCE_INVALID"))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -1049,7 +1005,7 @@ test("signed negative search must remain a hypothesis with unknown availability"
   }
 })
 
-test("prose code citations cannot widen evidence-bundle line ranges", async () => {
+test("prose code citations must reference real line ranges", async () => {
   const dir = await freshProject()
   try {
     const workflowId = "prose-code-range"
@@ -1061,7 +1017,7 @@ test("prose code citations cannot widen evidence-bundle line ranges", async () =
     payload.sections["证据与追踪"] += "\n\n现状代码证据索引：code:src/app.js#L1-L999。"
     const result = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
       stage: "01-current-evidence", summary: longSummary, ...payload })
-    assert.ok(result.findings.some((finding) => finding.code === "PROSE_CODE_EVIDENCE_NOT_ISSUED"))
+    assert.ok(result.findings.some((finding) => finding.code === "PROSE_CODE_EVIDENCE_INVALID"))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -1210,21 +1166,6 @@ test("evidence gap cannot smuggle a target persistence decision", async () => {
   }
 })
 
-test("evidence stage scope checks ignore whitespace inserted inside Chinese tool arguments", async () => {
-  const dir = await freshProject()
-  try {
-    await initialize({ workflowType: "add-feature", workflowId: "evidence-leak-spaces", projectRoot: dir, title: "t", request: "新增访问轨迹" })
-    const payload = baselinePayload()
-    payload.sections["输入场景与现状事实"] += "\n\n候选方案决定不 改表 结构，并采用只 读查询。"
-    payload.sections["证据与追踪"] += "\n\n回滚 即移除新入口。"
-    const r = await submit({ workflowType: "add-feature", workflowId: "evidence-leak-spaces", projectRoot: dir,
-      stage: "01-current-evidence", summary: longSummary, ...payload })
-    assert.ok(r.findings.some((f) => f.code === "EVIDENCE_STAGE_TARGET_DESIGN_LEAK" && f.severity === "blocking"))
-    assert.equal(r.lastCompletedStage, "00-request")
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-})
 
 test("evidence stage rejects downstream claim kinds and unproven absence claims", async () => {
   const dir = await freshProject()
@@ -1313,7 +1254,7 @@ test("orchestrator blocks a stage from writing another stage's milestone section
   }
 })
 
-test("strategic event storm blocks technical design leakage", async () => {
+test("strategic event storm reports technical wording as advisory", async () => {
   const dir = await freshProject()
   try {
     await initialize({ workflowType: "add-feature", workflowId: "scope", projectRoot: dir, title: "t", request: "新增访问轨迹" })
@@ -1322,7 +1263,7 @@ test("strategic event storm blocks technical design leakage", async () => {
     const r = await submit({ workflowType: "add-feature", workflowId: "scope", projectRoot: dir,
       stage: "02-big-picture-event-storm", summary: longSummary,
       sections: { "战略事件风暴": "用户发起查看后，使用 Redis 保存结果并设计 API 接口路径。" } })
-    assert.ok(r.findings.some((f) => f.code === "STRATEGIC_EVENTSTORM_TECHNICAL_LEAK" && f.severity === "blocking"))
+    assert.ok(r.findings.some((f) => f.code === "STRATEGIC_EVENTSTORM_TECHNICAL_LEAK" && f.severity === "warning"))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -1658,7 +1599,7 @@ test("a saved section blocker cannot be bypassed by changing only the summary", 
       .map((concept) => `### ${concept}\n该业务分析维度已覆盖。`).join("\n\n")
     const sections = Object.fromEntries(prepared.stageCard.unfilledSectionHeadings.map((heading) => [heading,
       `### ${heading}结论\n围绕用户目标形成系统级业务场景、事件、规则、异常、读模型和候选边界线索。\n\n${concepts}`]))
-    sections["热点与边界线索"] += "\n\n分页语义仍由 DEC-PAGE 决定。"
+    sections["热点与边界线索"] += "\n\n分页语义仍由 DEC-UNKNOWN 决定。"
     const decisions = [...milestoneIDecisionItems(), {
       id: "DEC-PAGE", question: "分页容量规则如何确定？",
       options: [{ id: "KEEP", label: "保持现状" }, { id: "CHANGE", label: "调整容量" }],
@@ -1669,7 +1610,7 @@ test("a saved section blocker cannot be bypassed by changing only the summary", 
     const failed = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
       stage: "02-big-picture-event-storm", summary: longSummary, sections,
       decisionItems: decisions })
-    assert.ok(failed.findings.some((finding) => finding.code === "DECISION_REFERENCE_WITHOUT_BLOCK_TARGET"
+    assert.ok(failed.findings.some((finding) => finding.code === "DECISION_REFERENCE_UNKNOWN"
       && finding.path === "sections.热点与边界线索"))
 
     const bypass = await submit({ workflowType: "add-feature", workflowId, projectRoot: dir,
@@ -1983,7 +1924,7 @@ test("a business stage cannot publish an incomplete independent artifact", async
   }
 })
 
-test("strategic design blocks capabilities not authorized by the original request", async () => {
+test("strategic design flags possible scope expansion without deciding intent from keywords", async () => {
   const dir = await freshProject()
   try {
     await initialize({ workflowType: "add-feature", workflowId: "intent", projectRoot: dir, title: "t",
@@ -1995,7 +1936,7 @@ test("strategic design blocks capabilities not authorized by the original reques
     const r = await submit({ workflowType: "add-feature", workflowId: "intent", projectRoot: dir,
       stage: "03-strategic-impact", summary: "战略设计新增按日浏览计数能力并形成业务结果。",
       sections: { "子域划分": "本次核心能力包含按日浏览计数，并把计数结果作为验收输出。" } })
-    assert.ok(r.findings.some((f) => f.code === "INTENT_CAPABILITY_EXPANSION" && f.severity === "blocking"))
+    assert.ok(r.findings.some((f) => f.code === "INTENT_CAPABILITY_EXPANSION" && f.severity === "warning"))
     const negated = await submit({ workflowType: "add-feature", workflowId: "intent", projectRoot: dir,
       stage: "03-strategic-impact", summary: "本阶段只决定业务边界与职责归属，不提前进入战术模型设计。",
       sections: { "战略设计范围与输入": "本阶段未设计聚合根、值对象、应用服务、DTO、SQL 或表结构。" } })
@@ -2005,15 +1946,13 @@ test("strategic design blocks capabilities not authorized by the original reques
   }
 })
 
-test("plugin installs a bounded DDD command agent with noisy tools disabled", async () => {
+test("plugin installs slash commands without registering or selecting agents", async () => {
   const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
-  const config = {}
+  const config = { agent: { build: { description: "User agent" } }, command: { ddd: { agent: "ddd-workflow" }, "ddd-code": { agent: "ddd-coding" } } }
   await plugin.config(config)
-  assert.equal(config.command.ddd.agent, "ddd-workflow")
-  assert.equal(config.agent["ddd-workflow"].maxSteps, 30)
-  assert.equal(config.agent["ddd-workflow"].tools.subagent, false)
-  assert.equal(config.agent["ddd-workflow"].tools.workflow_run, false)
-  assert.equal(config.agent["ddd-workflow"].tools.skill_eval, false)
+  assert.equal(config.command.ddd.agent, undefined)
+  assert.equal(config.command['ddd-code'].agent, undefined)
+  assert.deepEqual(config.agent, { build: { description: "User agent" } })
   assert.match(config.command.ddd.template, /action=complete-stage/)
   assert.deepEqual(Object.keys(plugin.tool), ["ddd_lifecycle"])
   assert.equal(config.mcp, undefined)
@@ -2078,7 +2017,7 @@ test("Mobile chat hook binds the exact slash-command request when command hook i
   )
   assert.equal(messageOutput.message.tools.subagent, false)
   assert.equal(messageOutput.message.tools.skill_eval, false)
-  assert.equal(messageOutput.message.tools.read, false)
+  assert.equal(messageOutput.message.tools.read, undefined)
   assert.equal(messageOutput.message.tools.ddd_lifecycle, true)
   assert.equal(messageOutput.message.tools.skill, true)
   const hookOutput = {
@@ -2102,7 +2041,7 @@ test("Mobile physically hides engineering tools from every ddd-workflow turn aft
     parts: [{ type: "text", text: "Load ddd-orchestrate and continue to the next human gate." }],
   }
   await plugin["chat.message"]({ sessionID: "expanded-command-mask", agent: "ddd-workflow" }, messageOutput)
-  assert.equal(messageOutput.message.tools.read, false)
+  assert.equal(messageOutput.message.tools.read, undefined)
   assert.equal(messageOutput.message.tools.bash, false)
   assert.equal(messageOutput.message.tools.ls, false)
   assert.equal(messageOutput.message.tools.mcp, false)
@@ -2110,7 +2049,8 @@ test("Mobile physically hides engineering tools from every ddd-workflow turn aft
   assert.equal(messageOutput.message.tools.subagent, false)
 
   const codingOutput = { message: {}, parts: [{ type: "text", text: "批准" }] }
-  await plugin["chat.message"]({ sessionID: "coding-command-tools", agent: "ddd-coding" }, codingOutput)
+  await plugin["command.execute.before"]({ sessionID: "coding-command-tools", command: "ddd-code", arguments: "" }, { parts: [] })
+  await plugin["chat.message"]({ sessionID: "coding-command-tools", agent: "build" }, codingOutput)
   assert.equal(codingOutput.message.tools, undefined)
 })
 
@@ -2252,24 +2192,8 @@ test("lifecycle normalizes heading-content arrays and can repair a saved draft",
   }
 })
 
-test("plugin replaces evidence-stage repository exploration with one bundle", async () => {
-  const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
-  const sessionID = "budget-test"
-  await plugin["command.execute.before"]({ command: "ddd", sessionID }, {})
-  await plugin["tool.execute.before"](
-    { tool: "mcp", sessionID, callID: "prepare" },
-    { args: { action: "prepare", input: { stage: "01-current-evidence" } } },
-  )
-  await assert.rejects(
-    plugin["tool.execute.before"](
-      { tool: "read", sessionID, callID: "read-9" },
-      { args: { filePath: "Shop.java" } },
-    ),
-    /DDD_EVIDENCE_BUNDLE_REQUIRED/,
-  )
-})
 
-test("JSON-string prepare payload activates the evidence guard and blocks Mobile subagents", async () => {
+test("JSON-string prepare payload cannot grant engineering access before successful preparation", async () => {
   const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
   const sessionID = "mobile-string-prepare"
   await plugin["chat.message"](
@@ -2285,7 +2209,7 @@ test("JSON-string prepare payload activates the evidence guard and blocks Mobile
       { tool: "subagent", sessionID, callID: "explore" },
       { args: { description: "Explore codebase" } },
     ),
-    /DDD_EVIDENCE_TOOL_DENIED/,
+    /DDD_LIFECYCLE_ONLY/,
   )
 })
 
@@ -2311,23 +2235,6 @@ test("modeling stages fail closed for unknown tools", async () => {
   )
 })
 
-test("evidence bundle guard survives plugin hook recreation", async () => {
-  const sessionID = "recreated-plugin-budget-test"
-  const preparedPlugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
-  await preparedPlugin["tool.execute.before"](
-    { tool: "configured_custom_tool_42", sessionID, callID: "prepare" },
-    { args: { action: "prepare", input: { stage: "01-current-evidence" } } },
-  )
-
-  const finalPlugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
-  await assert.rejects(
-    finalPlugin["tool.execute.before"](
-      { tool: "grep", sessionID, callID: "grep-9" },
-      { args: { pattern: "Shop" } },
-    ),
-    /DDD_EVIDENCE_BUNDLE_REQUIRED/,
-  )
-})
 
 test("persisted session binding blocks Mobile fallback tools after in-memory hook state is absent", async () => {
   const dir = await freshProject()
@@ -2359,7 +2266,7 @@ test("persisted session binding blocks Mobile fallback tools after in-memory hoo
   }
 })
 
-test("recreated Mobile process fails closed at a human gate before its first Read or Bash", async () => {
+test("recreated Mobile process allows inspection at a human gate but still denies Shell", async () => {
   const dir = await freshProject()
   const sessionID = "persisted-human-gate-guard"
   const context = {
@@ -2378,12 +2285,11 @@ test("recreated Mobile process fails closed at a human gate before its first Rea
     // Mobile starts a fresh process for the next human response. `worktree`
     // may be broader than `directory`, so recovery must inspect both roots.
     const recreated = await DddWorkflowPlugin({ directory: dir, worktree: path.dirname(dir) })
-    await assert.rejects(
+    await assert.doesNotReject(
       recreated["tool.execute.before"](
         { tool: "Read", sessionID, callID: "first-read" },
         { args: { filePath: path.join(dir, "openspec", "changes", "human-gate-guard", "ddd", "I-strategic-eventstorm.md") } },
       ),
-      /DDD_LIFECYCLE_ONLY/,
     )
     await assert.rejects(
       recreated["tool.execute.before"](
@@ -2395,7 +2301,7 @@ test("recreated Mobile process fails closed at a human gate before its first Rea
 
     const approvalMessage = { message: {}, parts: [{ type: "text", text: "批准" }] }
     await recreated["chat.message"]({ sessionID, agent: "ddd-workflow" }, approvalMessage)
-    assert.equal(approvalMessage.message.tools.read, false)
+    assert.equal(approvalMessage.message.tools.read, undefined)
     assert.equal(approvalMessage.message.tools.bash, false)
     assert.equal(approvalMessage.message.tools.skill_run_script, false)
     assert.equal(approvalMessage.message.tools.skill_eval, false)
@@ -2431,26 +2337,6 @@ test("review runtime failures return a self-contained stop contract instead of i
   }
 })
 
-test("plugin activates the evidence bundle guard when prepare infers the stage", async () => {
-  const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
-  const sessionID = "inferred-budget-test"
-  await plugin["command.execute.before"]({ command: "ddd", sessionID }, {})
-  await plugin["tool.execute.before"](
-    { tool: "mcp", sessionID, callID: "prepare" },
-    { args: { action: "prepare", input: {} } },
-  )
-  await plugin["tool.execute.after"](
-    { tool: "mcp", sessionID, callID: "prepare", args: { action: "prepare", input: {} } },
-    { output: JSON.stringify({ stageCard: { scopeContractId: "existing-system-baseline" } }) },
-  )
-  await assert.rejects(
-    plugin["tool.execute.before"](
-      { tool: "grep", sessionID, callID: "grep-9" },
-      { args: { pattern: "Shop" } },
-    ),
-    /DDD_EVIDENCE_BUNDLE_REQUIRED/,
-  )
-})
 
 test("evidence bundle returns bounded cited excerpts and OpenSpec index", async () => {
   const dir = await freshProject()
@@ -2647,7 +2533,7 @@ test("incremental submit accumulates small section drafts and publishes atomical
   }
 })
 
-test("incremental submit refuses to persist an out-of-scope draft", async () => {
+test("incremental submit persists advisory findings for later review", async () => {
   const dir = await freshProject()
   try {
     await initialize({ workflowType: "add-feature", workflowId: "bad-draft", projectRoot: dir, title: "t", request: "新增访问轨迹" })
@@ -2660,9 +2546,9 @@ test("incremental submit refuses to persist an out-of-scope draft", async () => 
         documentSection: "输入场景与现状事实", authorityRefs: ["user-input:original-request"], evidenceRefs: [], attributes: {} }],
     })
     assert.ok(result.findings.some((finding) => finding.code === "EVIDENCE_STAGE_TARGET_DESIGN_LEAK"))
-    assert.equal(result.draft, undefined)
+    assert.equal(result.draft.saved, true)
     const draftFile = path.join(dir, "openspec", "changes", "bad-draft", "ddd", ".ddd", "workbench", "01-current-evidence.draft.json")
-    await assert.rejects(readFile(draftFile, "utf8"), /ENOENT/)
+    assert.ok(JSON.parse(await readFile(draftFile, "utf8")))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -2697,6 +2583,32 @@ test("human gate: submit then review approve advances", async () => {
     assert.equal(approved.state.humanDecisions[0].selectedCandidateId, "candidate-a")
   } finally {
     await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("semantic approval executes review and prepares next stage without reauthorization", async () => {
+  const dir = await freshProject()
+  const sessionID='semantic-review-full-path'
+  try {
+    await initialize({workflowType:'add-feature',workflowId:'semantic-review',projectRoot:dir,title:'t',request:'r'})
+    await completeMilestoneI(dir,'semantic-review')
+    const hooks=await DddWorkflowPlugin({directory:dir,worktree:dir},{})
+    const text='按照最推荐的方案，批准，然后继续下一阶段'
+    await hooks['chat.message']({sessionID,messageID:'user_semantic',agent:'ddd-workflow'},{message:{id:'user_semantic'},parts:[{type:'text',text}]})
+    const ctx={sessionID,worktree:dir,agent:'ddd-workflow'}
+    const run=async args=>JSON.parse(await dddLifecycleTool.execute(args,ctx))
+    assert.equal((await run({action:'intent',input:{messageID:'user_semantic',intent:'approve',quote:text,continueAfterReview:true}})).accepted,true)
+    const approved=await run({action:'review',input:{decision:'approve',reviewer:'test-user'}})
+    assert.equal(approved.reviewRecord.decision,'approve')
+    const next=await run({action:'prepare',input:{}})
+    assert.ok(next.stageCard,JSON.stringify(next))
+    assert.equal(next.stageCard.stageId,'03-strategic-impact')
+    assert.match((await run({action:'review',input:{decision:'approve',reviewer:'test-user'}})).error,/NOT_AUTHORIZED/)
+  } finally {
+    const {clearSemanticTurn}=await import('../dist/semantic-turn.js')
+    const {turnIntents}=await import('../dist/turn-intent.js')
+    clearSemanticTurn(sessionID); turnIntents.delete(sessionID)
+    await rm(dir,{recursive:true,force:true})
   }
 })
 
@@ -2764,7 +2676,7 @@ test("review revise routes back", async () => {
   }
 })
 
-test("milestone IV model identifier feedback stays in model review instead of event storming", async () => {
+test("milestone IV feedback exposes legal writers for semantic owner selection", async () => {
   const profile = await profileFor("add-feature")
   const state = {
     schemaVersion: "ddd-workflow-state/v1", workflowType: "add-feature", workflowId: "model-id-owner",
@@ -2777,8 +2689,11 @@ test("milestone IV model identifier feedback stays in model review instead of ev
     }],
   }
   const transition = workflowTransition(profile, state)
-  assert.equal(transition.nextStage, "07-model-review")
-  assert.deepEqual(transition.allowedNextStages, ["07-model-review"])
+  assert.equal(transition.nextStage, null)
+  assert.ok(transition.allowedNextStages.includes("07-model-review"))
+  assert.ok(transition.allowedNextStages.includes("06-tactical-design"))
+  state.checkpoints[0].review.feedback = "模块职责与边界还不清楚"
+  assert.deepEqual(workflowTransition(profile, state).allowedNextStages, transition.allowedNextStages)
 })
 
 test("review revise bypasses approval validation and a corrected resubmit restores the human gate", async () => {
@@ -2794,7 +2709,7 @@ test("review revise bypasses approval validation and a corrected resubmit restor
       stage: "02-big-picture-event-storm", decision: "revise", reviewer: "tester",
       feedback: "战略事件风暴的一页结论泄露技术设计，请退回当前阶段修正。" })
     assert.equal(returned.requiredAction, "revise")
-    assert.deepEqual(returned.allowedNextStages, ["02-big-picture-event-storm"])
+    assert.ok(returned.allowedNextStages.includes("02-big-picture-event-storm"))
 
     await prepare({ workflowType: "add-feature", workflowId: "rv-invalid", projectRoot: dir, stage: "02-big-picture-event-storm" })
     const resubmitted = await submit({ workflowType: "add-feature", workflowId: "rv-invalid", projectRoot: dir,
@@ -2862,24 +2777,6 @@ test("runtime block records evidence and prepare atomically resumes the same sta
   }
 })
 
-test("implementation stage hook rejects subagents and tool downloads", async () => {
-  const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
-  const sessionID = "implementation-policy"
-  await plugin["command.execute.before"]({ command: "ddd", sessionID }, {})
-  await plugin["tool.execute.before"](
-    { tool: "mcp", sessionID, callID: "prepare" },
-    { args: { action: "prepare", input: { stage: "09-implementation" } } },
-  )
-  await assert.rejects(
-    plugin["tool.execute.before"]({ tool: "subagent", sessionID, callID: "fanout" }, { args: {} }),
-    /DDD_IMPLEMENTATION_TOOL_DENIED/,
-  )
-  await assert.rejects(
-    plugin["tool.execute.before"]({ tool: "bash", sessionID, callID: "download" },
-      { args: { command: "powershell Invoke-WebRequest https://example.invalid/apache-maven.zip" } }),
-    /DDD_IMPLEMENTATION_BOOTSTRAP_DENIED/,
-  )
-})
 
 test("ddd-coding cannot use repository tools before lifecycle review and prepare", async () => {
   const plugin = await DddWorkflowPlugin({ directory: process.cwd(), worktree: process.cwd() })
@@ -2911,7 +2808,7 @@ test("plugin rejects generic writes to formal milestone and OpenSpec planning ar
       plugin["tool.execute.before"]({ tool: "write", sessionID, callID: filePath }, { args }),
       /DDD_FORMAL_ARTIFACT_WRITE_DENIED/,
     )
-    assert.equal(args.filePath, path.resolve(process.cwd()))
+    assert.equal(args.filePath, filePath, "denial must not silently redirect a write")
   }
   await assert.rejects(
     plugin["tool.execute.before"]({ tool: "Edit", sessionID, callID: "mobile-title-case" },

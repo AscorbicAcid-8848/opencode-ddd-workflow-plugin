@@ -32,27 +32,6 @@ function cycleChoices(profile, latest) {
         choices.push(next.id);
     return [...new Set(choices)];
 }
-function feedbackOwnerStage(profile, latest, beforeIndex) {
-    const feedback = latest.review?.feedback ?? "";
-    const matchers = [
-        [/(?:模型一致性|稳定标识|模型标识|\bME-\d+\b|\bINV-\d+\b)/u, /(?:^|-)(?:model-review)$/],
-        [/(?:现状证据|行为基线|兼容性约束|证据缺口)/u, /(?:^|-)(?:current-evidence|baseline-evidence)$/],
-        [/(?:战略事件风暴|大图事件风暴|系统级事件流|一页结论|业务主题)/u, /(?:^|-)(?:big-picture-event-storm)$/],
-        [/(?:数据库|表结构|持久化|仓储|聚合|值对象|应用服务|领域服务|模块|分层|依赖)/u, /(?:^|-)(?:tactical-design|pilot-tactical-design)$/],
-        [/(?:命令|领域事件|策略|不变量|战术事件风暴|设计级事件风暴)/u, /(?:^|-)(?:design-level-event-storm|pilot-design-level-event-storm)$/],
-        [/(?:子域|限界上下文|上下文映射|微服务边界|战略设计|服务用例)/u, /(?:^|-)(?:strategic-impact|target-strategy|subdomains|bounded-contexts|context-map|service-use-cases)$/],
-    ];
-    for (const [fbPat, stagePat] of matchers) {
-        if (!fbPat.test(feedback))
-            continue;
-        for (let i = beforeIndex; i >= 0; i -= 1) {
-            const s = profile.stages[i];
-            if (s && stagePat.test(s.id))
-                return s.id;
-        }
-    }
-    return null;
-}
 export function workflowTransition(profile, state) {
     const latest = state.checkpoints.at(-1) ?? null;
     const common = (extra) => ({
@@ -100,9 +79,8 @@ export function workflowTransition(profile, state) {
                 ?? `里程碑 ${milestone?.roman ?? "?"} 已形成，请人工验收。验收清单：\n${(latest.reviewChecklist ?? []).map((c) => `- ${c}`).join("\n")}`,
         });
     if (state.status === "revision_requested") {
-        const explicit = feedbackOwnerStage(profile, latest, idx);
-        const revisionStages = explicit ? [explicit]
-            : writers.filter((w) => w.id !== "00-request" && !w.summaryStage && stageIndex(profile, w.id) <= idx).map((w) => w.id);
+        // The model selects the responsible writer from legal stages; feedback wording is not a state transition.
+        const revisionStages = writers.filter((w) => w.id !== "00-request" && !w.summaryStage && stageIndex(profile, w.id) <= idx).map((w) => w.id);
         const allowed = revisionStages.length ? revisionStages : [latest.stage];
         return common({
             ...base, milestoneReady: false, milestoneStatus: "revision-required",

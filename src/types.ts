@@ -1,7 +1,7 @@
 export type WorkflowType = "add-feature" | "refactor-system" | "create-system"
 export type ReviewDecision = "approve" | "revise" | "reject"
 export type OpenSpecArtifact = "proposal" | "specs" | "design" | "tasks" | "apply"
-export type LifecycleAction = "init" | "prepare" | "evidence-bundle" | "complete-stage" | "section" | "finalize" | "submit" | "review" | "status" | "block" | "archive" | "openspec" | "openspec-plan"
+export type LifecycleAction = "intent" | "init" | "prepare" | "evidence-bundle" | "complete-stage" | "section" | "finalize" | "submit" | "review" | "status" | "block" | "archive" | "openspec" | "openspec-plan"
 
 export interface HumanDecisionResolution {
   selectedCandidateId?: string

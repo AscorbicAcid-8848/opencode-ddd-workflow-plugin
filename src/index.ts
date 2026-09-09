@@ -11,13 +11,15 @@ import { evidenceBundle } from "./evidence.js"
 import { compileDeliveryMilestoneSections, compileStructuredPlan, normalizeStructuredPlan, validateStructuredPlan, type StructuredDeliveryPlan } from "./delivery-plan.js"
 import type { WorkflowType, LifecycleAction, ReviewDecision, OpenSpecArtifact, StageClaim } from "./types.js"
 import { recordRuntimeSession } from "./session-links.js"
-import { classifyTurn, turnIntents } from "./turn-intent.js"
+import { turnIntents } from "./turn-intent.js"
+import { beginSemanticTurn, clearSemanticTurn, declareIntent, intentError, bindIntentWorkflow, finishIntentReview, reviewMustStop, pendingCommands } from "./semantic-turn.js"
 import { resolvePanelReview } from "./dashboard/session-handoff.js"
+import { createInterruptionMonitor, readExecutionInterruption } from "./execution-interruption.js"
 
 const savedPanelReviewTurns = new Set<string>()
 
 const workflowType = tool.schema.enum(["add-feature", "refactor-system", "create-system"])
-const lifecycleAction = tool.schema.enum(["init", "prepare", "evidence-bundle", "complete-stage", "review", "status", "block", "archive", "openspec", "openspec-plan"])
+const lifecycleAction = tool.schema.enum(["intent", "init", "prepare", "evidence-bundle", "complete-stage", "review", "status", "block", "archive", "openspec", "openspec-plan"])
 const reqText = () => tool.schema.string().min(1)
 
 function projectRoot(args: { project_root?: string }, ctx: { worktree?: string; directory?: string }) {
@@ -283,13 +285,11 @@ function normalizeAtomicSections(raw: unknown): Record<string, string> {
   }))
 }
 
-const DDD_AGENT_ID = "ddd-workflow"
-const DDD_CODE_AGENT_ID = "ddd-coding"
 const DDD_COMMAND_TEMPLATE = [
   "Load `ddd-orchestrate` and treat the text below as the immutable original request.",
   "Use only `ddd_lifecycle`. The input value must be a native object, sections may be either a heading-to-content object or a native [{heading,content}] array, and observations must be a native array; never JSON-encode them as strings. For an existing-system evidence stage call action=evidence-bundle once after prepare with 2-6 likely source identifiers; prefer short symbols copied from the original request or signed repository evidence over invented compound class names. Do not use repository or shell exploration. For every stage call action=complete-stage once with every allowed heading. Continue until human review, a real block, archive, or completion.",
   "complete-stage owns claim bookkeeping and atomically publishes only the current Arabic stage artifact. Submit the full stage once. If it returns draft.saved=true, obey draft.repairContract: repair only editablePaths; when replaceObservations=true resend one complete observations array; a decisionItems[n] repair resends only that stable id and the runtime preserves siblings. If draft.retryableByModel=false, stop. The runtime automatically summarizes completed stage artifacts into the fixed Roman human-review document; never author that summary. At milestone V submit one structured openspec-plan, then complete-stage with empty input.",
-  "Keep total section text between qualityContract.minTotalChars and targetMaxTotalChars. Omit observations when stageCard has no claimContract. Do not narrate plans between tool calls. Treat the evidence bundle as complete; record anything outside it as evidence-gap/open-question. At a human gate output transition.message and stop.",
+  "Length targets are advisory; answer the stage-owned phaseRequiredOutcomes without padding. Omit observations when stageCard has no claimContract. Do not narrate plans between tool calls. Treat the evidence bundle as the available bounded evidence, not proof of complete business coverage; record anything outside it as evidence-gap/open-question. At a human gate output transition.message and stop.",
   "",
   "$ARGUMENTS",
 ].join("\n")
@@ -319,21 +319,21 @@ const disabledDddAgentTools = {
 
 const modelingOnlyTools = {
   ...disabledDddAgentTools,
-  read: false, glob: false, grep: false, bash: false, shell: false,
+  bash: false, shell: false,
   edit: false, write: false, apply_patch: false, patch: false, multiedit: false, multi_edit: false,
 }
 
 const DDD_CODE_COMMAND_TEMPLATE = [
   "Load `ddd-implementation`. This command is only for approving milestone V, implementing approved vertical slices, and producing milestone VI evidence.",
-  "FIRST TOOL CALL: ddd_lifecycle action=review with input={} when milestone V is awaiting approval; otherwise ddd_lifecycle action=prepare with input={}. Never read, glob, grep, or run Git before that lifecycle call. The runtime normalizes the approval and resolves the unique next stage.",
-  "Use ddd_lifecycle for review/prepare/complete-stage. Review binds automatically; do not call status. Read only the approved roadmap/model contract and mapped source files. Implement one slice, run real tests, create one Git commit, then complete-stage with sliceId. A milestoneRoman=VI response with milestoneStatus=accumulating is not a stop condition: obey requiredAction and continue through model review. Stop only when humanReviewRequired=true, a real block is returned, or the workflow is complete.",
-  "Do not redesign, rename ME/INV contracts, scan unrelated files, install tools, or narrate between calls. On unavailable evidence call block.",
+  "First interpret the current user request using action=intent (messageID, intent, quote, continueAfterReview). status is allowed to resolve the current gate. This coding command can approve milestone V only, never VI or another gate. Then review with an explicit decision and reviewer at V only if the user authorized approval, or prepare at an approved implementation step. Never read, glob, grep or run Git before authorization and prepare.",
+  "Use ddd_lifecycle for review/prepare/complete-stage. Review binds automatically; use status when needed to resolve the current state. Read only the approved roadmap/model contract and mapped source files. Implement one slice, run real tests, create one Git commit, then complete-stage with sliceId. A milestoneRoman=VI response with milestoneStatus=accumulating is not a stop condition: obey requiredAction and continue through model review. Stop only when humanReviewRequired=true, a real block is returned, or the workflow is complete.",
+  "Do not redesign or rename ME/INV contracts. Gather relevant evidence and run necessary verification within host permissions; use block for genuine unresolved prerequisites, not a fixed tool budget.",
   "",
   "$ARGUMENTS",
 ].join("\n")
 
 const lifecycleTool = tool({
-  description: "DDD 工作流生命周期控制器。init→prepare→现状 evidence-bundle→complete-stage→review；里程碑 V 只提交结构化 openspec-plan，由运行时编译 OpenSpec 和路线图；Coding 按批准 sliceId 推进；最终 archive。",
+  description: "DDD 生命周期。普通对话先 intent：input={messageID,intent:query|clarify|start|continue|approve|revise|reject,quote,continueAfterReview:boolean}。再按状态 init/prepare/evidence-bundle/complete-stage/review/openspec-plan/archive。status 始终可查询。",
   args: {
     action: lifecycleAction,
     workflow_type: workflowType.optional().describe("init 必填；其余当项目仅有一个活动 change 时可省略。"),
@@ -348,6 +348,20 @@ const lifecycleTool = tool({
   },
   async execute(args, context) {
     try {
+      if (args.action === 'intent') {
+        const declared=declareIntent(context.sessionID,args.input)
+        const kind=(args.input as any)?.intent
+        if (declared.accepted && ['continue','approve','revise','reject'].includes(kind)) {
+          const root=projectRoot(args,context)
+          const id=await resolveActiveIdentity({sessionID:context.sessionID,worktree:root},args.workflow_type,args.workflow_id)
+          const p=await profileFor(id.workflowType)
+          const state=await loadState(await workflowRoot(id.projectRoot,p.artifactBase,p.artifactSubdir,id.workflowId))
+          bindIntentWorkflow(context.sessionID,JSON.stringify([id.projectRoot,id.workflowType,id.workflowId]),kind==='continue'?undefined:state.checkpoints.at(-1)?.checkpointId)
+        }
+        return out(declared)
+      }
+      const deniedIntent = intentError(context.sessionID,args.action,(args.input as any)?.decision)
+      if (deniedIntent) return out({error:deniedIntent,allowedActions:['intent','status'],mustStop:!deniedIntent.startsWith('DDD_INTENT_REQUIRED')})
       if (args.action === "review" && savedPanelReviewTurns.has(context.sessionID)) return out({
         error: "DDD_REVIEW_ALREADY_SAVED: 面板已保存本轮审核，不得重复 review。请先查询 status，按已保存反馈修订或继续。",
         retryableByModel: false, alreadySaved: true, allowedActions: ["status"],
@@ -368,6 +382,7 @@ const lifecycleTool = tool({
           return out({ error: "init 需要 workflow_type、workflow_id 和 input.{title,request}。" })
         }
         const root = projectRoot(args, ctx)
+        bindIntentWorkflow(context.sessionID,JSON.stringify([root,args.workflow_type,args.workflow_id]))
         const result = await initialize({ workflowType: args.workflow_type, workflowId: args.workflow_id, projectRoot: root, title: i.title, request: i.request })
         const identity = { workflowType: args.workflow_type, workflowId: args.workflow_id, projectRoot: root }
         sessionIdentities.set(context.sessionID, identity)
@@ -389,6 +404,7 @@ const lifecycleTool = tool({
       }
       // 状态查询不得为会话绑定而写回工作流状态或生成投影。
       if (args.action !== "status") {
+        bindIntentWorkflow(context.sessionID,JSON.stringify([id.projectRoot,id.workflowType,id.workflowId]))
         await bindRuntimeSession(id, context.sessionID)
         sessionIdentities.set(context.sessionID, id)
       }
@@ -479,25 +495,36 @@ const lifecycleTool = tool({
       }
       if (args.action === "review") {
         const transition = await status(id)
-        const milestoneVAutoApproval = context.agent === DDD_CODE_AGENT_ID && transition.milestoneRoman === "V"
-        const emptyPayload = !payload || Object.keys(payload).length === 0
-        const i = emptyPayload && milestoneVAutoApproval ? { decision: "approve", reviewer: "human-authorized-via-ddd-code" } : payload
+        const i = payload
         const decision = normalizeReviewDecision(i?.decision)
+        const deniedDecision = intentError(context.sessionID,'review',decision ?? undefined)
+        if (deniedDecision) return out({error:deniedDecision})
         if (!decision || !i?.reviewer) {
           return out({ error: "review 需要 input.{decision,reviewer}；stage 可省略并自动绑定当前唯一人工检查点。" })
         }
         const stage = transition.nextHumanGate ?? i.stage
         if (!stage) return out({ error: "当前没有待人工验收的里程碑，不能执行 review。" })
-        return out(await review({ ...id, stage, decision, reviewer: i.reviewer, feedback: i.feedback,
-          resolution: i.resolution ?? (i.selectedCandidateId ? { selectedCandidateId: i.selectedCandidateId } : undefined) }))
+        const reviewProfile = await profileFor(id.workflowType)
+        const reviewRoot = await workflowRoot(id.projectRoot,reviewProfile.artifactBase,reviewProfile.artifactSubdir,id.workflowId)
+        const checkpoint = (await loadState(reviewRoot)).checkpoints.at(-1)?.checkpointId
+        bindIntentWorkflow(context.sessionID,JSON.stringify([id.projectRoot,id.workflowType,id.workflowId]),checkpoint)
+        const reviewed = await review({ ...id, stage, decision, reviewer: i.reviewer, feedback: i.feedback,
+          resolution: i.resolution ?? (i.selectedCandidateId ? { selectedCandidateId: i.selectedCandidateId } : undefined) })
+        finishIntentReview(context.sessionID)
+        if (reviewMustStop(context.sessionID)) return out({...reviewed,requiredAction:'stop',mustContinue:false,stopAllowed:true,message:'已记录本次审核；用户未授权继续推进，等待下一条指令。'})
+        return out(reviewed)
       }
       if (args.action === "status") {
         const i = payload ?? {}
         const result = await status({ ...id, view: i.view })
-        if (turnIntents.get(context.sessionID) === "read-only") return out({ ...result,
+        const profile = await profileFor(id.workflowType)
+        const root = await workflowRoot(id.projectRoot, profile.artifactBase, profile.artifactSubdir, id.workflowId)
+        const interrupted = await readExecutionInterruption(root, await loadState(root))
+        if (interrupted) Object.assign(result, {executionInterruption:interrupted, message:interrupted.message})
+        if (turnIntents.get(context.sessionID) === "read-only" || turnIntents.get(context.sessionID) === "pending" || reviewMustStop(context.sessionID)) return out({ ...result,
           workflowRequiredAction: result.requiredAction, workflowMustContinue: result.mustContinue,
           requiredAction: "report-status", mustContinue: false, stopAllowed: true, readOnly: true,
-          message: `当前里程碑：${result.milestoneRoman ?? "尚未形成"}；状态：${result.milestoneStatus}。下一候选阶段：${result.nextStage ?? "无"}。本轮只报告状态，不执行下一步；等待用户明确授权。`,
+          message: `${interrupted ? interrupted.message + '\n' : ''}当前里程碑：${result.milestoneRoman ?? "尚未形成"}；状态：${result.milestoneStatus}。下一候选阶段：${result.nextStage ?? "无"}。本轮只报告状态，不执行下一步；等待用户明确授权。`,
         })
         return out(result)
       }
@@ -636,11 +663,6 @@ const lifecycleTool = tool({
   },
 })
 
-const observationKind = tool.schema.enum([
-  "current-behavior-fact", "current-topology-fact", "current-spec-decision",
-  "compatibility-constraint", "evidence-gap", "open-question",
-])
-
 function claimFromObservation(stage: string, heading: string, observation: {
   kind: string; statement: string; evidence_refs?: string[]; absent?: boolean
 }): StageClaim {
@@ -677,55 +699,6 @@ function claimFromObservation(stage: string, heading: string, observation: {
   }
 }
 
-const submitSectionTool = tool({
-  description: "暂存当前 DDD 阶段的一个章节。一次只写一个允许的二级标题；运行时自动生成 claim id、成熟度、章节映射和证据属性，避免模型手写复杂合同。",
-  args: {
-    stage: reqText().describe("prepare 返回的精确 stageId。"),
-    heading: reqText().describe("stageCard.allowedSectionHeadings 中的一个精确标题。"),
-    summary: reqText().describe("当前阶段一句话结论，至少 20 个字符。"),
-    content: reqText().describe("该章节正文，通常 600-1400 字符；不得含 ## 二级标题。"),
-    observations: tool.schema.array(tool.schema.object({
-      kind: observationKind,
-      statement: reqText().describe("正文中的一条事实、约束、证据缺口或开放问题。"),
-      evidence_refs: tool.schema.array(reqText()).optional().describe("可检查引用，例如 code:src/A.java#L10、test:tests/A.test。负向 search: 引用只能逐字复制 evidence-bundle 签发的 negativeSearchEvidence.ref。"),
-      absent: tool.schema.boolean().optional().describe("只有负向搜索证明不存在时才为 true，并提供 search: 引用。"),
-    })).optional().describe("仅现状证据阶段需要；其它阶段省略。"),
-  },
-  async execute(args, context) {
-    try {
-      const id = await resolveActiveIdentity({ sessionID: context.sessionID, worktree: context.worktree, directory: context.directory })
-      const observations = args.observations ?? []
-      const missing = observations.map((item) => item.statement.trim()).filter((statement) => !args.content.includes(statement))
-      const content = missing.length ? `${args.content.trim()}\n\n### 结构化结论\n${missing.map((item) => `- ${item}`).join("\n")}` : args.content
-      return out(await submit({ ...id, stage: args.stage, summary: args.summary,
-        sections: { [args.heading]: content },
-        claims: observations.map((item) => claimFromObservation(args.stage, args.heading, item)),
-        finalize: false }))
-    } catch (error) {
-      return out({ error: (error as Error).message, errorType: (error as Error).name })
-    }
-  },
-})
-
-const finalizeStageTool = tool({
-  description: "对已暂存的当前阶段章节执行完整校验并原子发布。只在 ddd_submit_section 返回 remainingSections=[] 后调用。",
-  args: {
-    stage: reqText().describe("prepare 返回的精确 stageId。"),
-    summary: reqText().describe("本阶段最终一句话结论，至少 20 个字符。"),
-    planned_slices: tool.schema.number().int().positive().optional(),
-    slice_id: tool.schema.string().optional(),
-  },
-  async execute(args, context) {
-    try {
-      const id = await resolveActiveIdentity({ sessionID: context.sessionID, worktree: context.worktree, directory: context.directory })
-      return out(await submit({ ...id, stage: args.stage, summary: args.summary, sections: {}, finalize: true,
-        plannedSlices: args.planned_slices, sliceId: args.slice_id }))
-    } catch (error) {
-      return out({ error: (error as Error).message, errorType: (error as Error).name })
-    }
-  },
-})
-
 export const dddLifecycleTool: ToolDefinition = lifecycleTool
 
 // Mobile Coder may recreate the plugin hook object between model steps. Keep
@@ -737,27 +710,11 @@ const codingSessions = new Set<string>()
 // slash-command argument before the model can reinterpret it. Bind that text
 // to the session and make init consume it as authoritative input.
 const pendingOriginalRequests = new Map<string, string>()
-const evidenceCalls = new Map<string, number>()
 const activeStages = new Map<string, string>()
-const repositoryCalls = new Map<string, number>()
-const shellCalls = new Map<string, number>()
 const evidenceTools = new Set(["read", "glob", "grep"])
 const implementationStages = new Set(["08-implementation", "09-implementation", "11-implementation"])
 const baselineStages = new Set(["01-current-evidence", "01-baseline-evidence"])
-const lifecycleActions = new Set(["init", "prepare", "evidence-bundle", "complete-stage", "review", "status", "block", "archive", "openspec", "openspec-plan"])
-
-function lifecyclePayload(args: Record<string, any> | undefined): Record<string, any> {
-  if (!args) return {}
-  if (typeof args.input === "string") {
-    try {
-      const parsed = JSON.parse(args.input)
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}
-    } catch {
-      return {}
-    }
-  }
-  return args.input && typeof args.input === "object" && !Array.isArray(args.input) ? args.input : {}
-}
+const lifecycleActions = new Set(["intent", "init", "prepare", "evidence-bundle", "complete-stage", "review", "status", "block", "archive", "openspec", "openspec-plan"])
 
 function dddRequestFromMessage(parts: any[]): string | undefined {
   for (const part of parts) {
@@ -780,21 +737,38 @@ function applyModelingToolMask(message: { tools?: Record<string, boolean> }): vo
 }
 
 export const DddWorkflowPlugin: Plugin = async (pluginInput, pluginOptions) => {
+  const checkInterruption = createInterruptionMonitor(pluginInput.directory || pluginInput.worktree, pluginInput.client)
   // OpenCode and Mobile Coder 1.3+ both expose this definition directly from
   // the Plugin SDK. No MCP process, protocol adapter, or duplicated tool is
   // involved.
   const lifecycleToolId = "ddd_lifecycle"
   return {
+    async event({event}) {
+      if (event.type !== 'session.idle' && !(event.type === 'session.status' && event.properties.status.type === 'idle')) return
+      try { await checkInterruption(event.properties.sessionID) }
+      catch (error) { await pluginInput.client.app.log({body:{service:'ddd-workflow',level:'warn',message:'Interruption notification failed',extra:{error:String(error)}}}).catch(()=>{}) }
+    },
     async "chat.message"(input, output) {
       savedPanelReviewTurns.delete(input.sessionID)
       const panel = await resolvePanelReview(path.resolve(pluginInput.directory || pluginInput.worktree || process.cwd()), input.sessionID, input.messageID ?? output.message.id)
       const text = output.parts.filter(p => p.type === "text").map(p => (p as any).text ?? "").join("\n")
       const originalRequest = dddRequestFromMessage(output.parts as any[])
       const persistedStage = await persistedStageForSession(pluginProjectRoots(pluginInput), input.sessionID)
-      const modelingAgent = input.agent === DDD_AGENT_ID
-      const codingAgent = input.agent === DDD_CODE_AGENT_ID
-      if (!panel && !originalRequest && !persistedStage && !modelingAgent && !codingAgent) return
-      turnIntents.set(input.sessionID, panel ? panel.stale || panel.decision === "reject" ? "read-only" : "execute" : classifyTurn(text))
+      const command = pendingCommands.get(input.sessionID)
+      pendingCommands.delete(input.sessionID)
+      // Recognize legacy sessions for migration; never register or select these agents.
+      const legacyDddSession = ['ddd-workflow','ddd-coding'].includes(input.agent ?? '')
+      const codingAgent = command === 'ddd-code' || Boolean(persistedStage && implementationStages.has(persistedStage))
+        || (command !== 'ddd' && codingSessions.has(input.sessionID))
+      if (!command && !panel && !originalRequest && !persistedStage && !dddSessions.has(input.sessionID) && !legacyDddSession) return
+      if (panel) {
+        clearSemanticTurn(input.sessionID)
+        turnIntents.set(input.sessionID,panel.stale || panel.decision==='reject'?'read-only':'execute')
+      } else {
+        const userText=originalRequest || (command==='ddd' ? pendingOriginalRequests.get(input.sessionID) : undefined) || text
+        beginSemanticTurn(input.sessionID,input.messageID ?? output.message.id,userText,command==='ddd-status')
+        output.message.system=[output.message.system,`本轮 DDD 用户消息 ID：${input.messageID ?? output.message.id}。${command==='ddd-status'?'显式只读，只查询并报告状态。':'由你理解用户语义，不使用关键词判断。首次写操作之前调用 ddd_lifecycle action=intent，input={messageID,intent:query|clarify|start|continue|approve|revise|reject,quote:本轮用户原话,continueAfterReview:boolean}。询问/讨论用query，含糊或冲突用clarify并提问；明确授权才声明相应操作。批准仅针对当前检查点；按用户是否要求继续决定continueAfterReview。状态查询可先执行。同一轮不需重复声明。'}`].filter(Boolean).join('\n')
+      }
       if (panel) {
         savedPanelReviewTurns.add(input.sessionID)
         sessionIdentities.set(input.sessionID, { workflowType: panel.workflowType, workflowId: panel.workflowId, projectRoot: path.resolve(pluginInput.directory || pluginInput.worktree || process.cwd()) })
@@ -808,45 +782,29 @@ export const DddWorkflowPlugin: Plugin = async (pluginInput, pluginOptions) => {
       // Mobile derives the visible tool table from UserMessage.tools. Put the
       // modeling policy at that boundary so disallowed tools are physically
       // absent from the model schema instead of relying only on a later hook.
-      // ddd-coding keeps its bounded engineering tools visible, but the
+      // The /ddd-code mode keeps engineering tools visible, but the
       // execute hook still requires lifecycle review/prepare before using them.
       if (!codingAgent) applyModelingToolMask(output.message)
     },
     async config(config) {
-      config.agent ??= {}
-      config.agent[DDD_AGENT_ID] = {
-        ...(config.agent[DDD_AGENT_ID] ?? {}),
-        description: "Run the deterministic DDD/OpenSpec lifecycle with a reduced tool surface.",
-        mode: "primary",
-        maxSteps: 30,
-        prompt: "DDD scheduler mode: use tools without progress narration. Existing-system baseline is prepare, one evidence-bundle, then one complete-stage; repository and shell exploration are unnecessary. Other stages are prepare then one complete-stage. Each Arabic business stage writes only its own stage artifact. The runtime automatically compiles the Roman human-review document; never author or repair it. At milestone V send one structured plan to openspec-plan, then complete-stage with empty input; never hand-write OpenSpec Markdown. At system-discovery, baselineClaims are the only AS-IS authority; every 现状已存在 capability cites its claim id, target rules cannot inherit adjacent interface outcomes, and boundaries remain candidate clues. Whenever stageCard exposes humanDecisionContract submit decisionItems. Each block is a typed {id,statement,documentSection}; open/deferred prose cites DEC-ID/BLOCK-ID. Options that defer or exclude use resultStatus and deferredToStage when applicable. A plain approval accepts each unique recommendation; otherwise review submits resolution.selections. Stop only at a human gate or real block.",
-        tools: { ...(config.agent[DDD_AGENT_ID]?.tools ?? {}), ...modelingOnlyTools },
-      }
-      config.agent[DDD_CODE_AGENT_ID] = {
-        ...(config.agent[DDD_CODE_AGENT_ID] ?? {}),
-        description: "Implement approved DDD vertical slices with bounded repository tools and real Git/test evidence.",
-        mode: "primary",
-        maxSteps: 50,
-        prompt: "DDD coding mode: use the approved roadmap and model contract. One vertical slice, one verification set, one Git commit, one complete-stage transaction. Milestone VI is only ready when humanReviewRequired=true; accumulating means continue through the transition's next stage. Never redesign or install infrastructure.",
-        tools: { ...(config.agent[DDD_CODE_AGENT_ID]?.tools ?? {}), ...disabledDddAgentTools },
-      }
       config.command ??= {}
       config.command.ddd = {
         ...(config.command.ddd ?? {}),
         description: "启动或继续一个具有六个人工里程碑的 DDD 工作流",
-        agent: DDD_AGENT_ID,
         template: DDD_COMMAND_TEMPLATE,
       }
       config.command["ddd-code"] = {
         ...(config.command["ddd-code"] ?? {}),
         description: "批准交付计划并实现 DDD 纵向切片，形成真实测试与 Git 证据",
-        agent: DDD_CODE_AGENT_ID,
         template: DDD_CODE_COMMAND_TEMPLATE,
       }
+      // Clear legacy command selection without touching unrelated user agents.
+      delete config.command.ddd.agent
+      delete config.command['ddd-code'].agent
     },
     async "command.execute.before"(input, output) {
+      if (['ddd-status','ddd','ddd-code'].includes(input.command)) pendingCommands.set(input.sessionID,input.command)
       if (input.command === "ddd-status") turnIntents.set(input.sessionID, "read-only")
-      if (input.command === "ddd" || input.command === "ddd-code") turnIntents.set(input.sessionID, classifyTurn(`/ddd ${input.arguments ?? ""}`))
       if (input.command === "ddd" || input.command === "ddd-code") dddSessions.add(input.sessionID)
       if (input.command === "ddd-code") codingSessions.add(input.sessionID)
       else if (input.command === "ddd") codingSessions.delete(input.sessionID)
@@ -861,14 +819,18 @@ export const DddWorkflowPlugin: Plugin = async (pluginInput, pluginOptions) => {
           await bindRuntimeSession(id, input.sessionID)
           sessionIdentities.set(input.sessionID, id)
           pendingOriginalRequests.delete(input.sessionID)
-          output.parts = [{ type: "text", text: `继续已有 DDD 工作流 ${JSON.stringify(id.workflowId)}，类型 ${id.workflowType}。先调用 ddd_lifecycle(action="status", workflow_id=${JSON.stringify(id.workflowId)}, input={view:"compact"})，随后严格按返回的 requiredAction/allowedNextStages 续跑。禁止 init、重置状态或把目录名当成新需求。续跑不是批准：若等待人工审核，展示当前里程碑并等待明确审核；不得自动批准。若需要编码代理，提示使用 /ddd-code 继续，不在建模代理内编码。` } as any]
+          output.parts = [{ type: "text", text: `继续已有 DDD 工作流 ${JSON.stringify(id.workflowId)}，类型 ${id.workflowType}。先调用 ddd_lifecycle(action="status", workflow_id=${JSON.stringify(id.workflowId)}, input={view:"compact"})，随后严格按返回的 requiredAction/allowedNextStages 续跑。禁止 init、重置状态或把目录名当成新需求。续跑不是批准：若等待人工审核，展示当前里程碑并等待明确审核；不得自动批准。若需要进入编码模式，提示使用 /ddd-code 继续，不在建模阶段编码。` } as any]
           return
         }
         if (originalRequest) pendingOriginalRequests.set(input.sessionID, originalRequest)
       }
     },
     async "tool.execute.before"(input, hookOutput) {
-      if (turnIntents.get(input.sessionID) === "read-only" && ["edit", "write", "apply_patch", "patch", "multiedit", "multi_edit", "bash", "shell"].includes(input.tool.toLowerCase())) {
+      if (["edit", "write", "apply_patch", "patch", "multiedit", "multi_edit", "bash", "shell"].includes(input.tool.toLowerCase())) {
+        const denied=intentError(input.sessionID,'prepare')
+        if(denied) throw new Error(denied)
+      }
+      if (['read-only','pending'].includes(turnIntents.get(input.sessionID) ?? '') && ["edit", "write", "apply_patch", "patch", "multiedit", "multi_edit", "bash", "shell"].includes(input.tool.toLowerCase())) {
         throw new Error("DDD_READ_ONLY_TURN: 本轮未授权修改或执行，请仅报告当前状态。")
       }
       const args = hookOutput.args as Record<string, any> | undefined
@@ -877,7 +839,7 @@ export const DddWorkflowPlugin: Plugin = async (pluginInput, pluginOptions) => {
       // bypassed by host-specific capitalization.
       const toolName = String(input.tool ?? "").toLowerCase()
       const boundOriginalRequest = pendingOriginalRequests.get(input.sessionID)
-      if (args?.action === "init" && boundOriginalRequest) {
+      if (toolName === lifecycleToolId && args?.action === "init" && boundOriginalRequest) {
         let initPayload: Record<string, any> = {}
         if (typeof args.input === "string") {
           try {
@@ -894,30 +856,12 @@ export const DddWorkflowPlugin: Plugin = async (pluginInput, pluginOptions) => {
         args.input = { ...initPayload, request: boundOriginalRequest }
       }
       if (toolName === "skill" && args?.name === "ddd-orchestrate") dddSessions.add(input.sessionID)
-      const payload = lifecyclePayload(args)
-      const stagePayload = String(payload.stage ?? "")
-      const isDddLifecyclePayload = typeof args?.action === "string" && lifecycleActions.has(args.action) && (
-        toolName === lifecycleToolId ||
-        args.action === "init" ||
-        /^(?:0[0-9]|1[0-2])-[a-z0-9-]+$/u.test(stagePayload) ||
-        dddSessions.has(input.sessionID)
-      )
+      const isDddLifecyclePayload = toolName === lifecycleToolId && typeof args?.action === "string" && lifecycleActions.has(args.action)
       if (isDddLifecyclePayload) {
-        // The lifecycle call itself is authoritative proof that this is a DDD
-        // session. Mobile Coder may wrap a configured custom tool under an
-        // internal id that differs from the UI label, so payload shape is more
-        // reliable than input.tool here.
+        // Only the registered tool is a DDD boundary; matching payloads from
+        // unrelated tools must not enroll or authorize a session.
         dddSessions.add(input.sessionID)
-        if (args?.action === "prepare" && payload.stage) {
-          const stage = String(payload.stage)
-          activeStages.set(input.sessionID, stage)
-          repositoryCalls.set(input.sessionID, 0)
-          shellCalls.set(input.sessionID, 0)
-          if (baselineStages.has(stage)) evidenceCalls.set(input.sessionID, 0)
-        }
-        if (["submit", "complete-stage"].includes(args?.action) && baselineStages.has(String(payload.stage ?? ""))) {
-          evidenceCalls.delete(input.sessionID)
-        }
+
       }
       const activeStage = activeStages.get(input.sessionID)
         ?? await persistedStageForSession(pluginProjectRoots(pluginInput), input.sessionID)
@@ -927,33 +871,8 @@ export const DddWorkflowPlugin: Plugin = async (pluginInput, pluginOptions) => {
         if (activeStage) activeStages.set(input.sessionID, activeStage)
       }
       const codingToolAccess = Boolean(activeStage && implementationStages.has(activeStage) && codingSessions.has(input.sessionID))
-      if (activeStage && implementationStages.has(activeStage)) {
-        if (["subagent", "workflow_run", "todowrite"].includes(toolName)) {
-          throw new Error("DDD_IMPLEMENTATION_TOOL_DENIED: 一个纵向切片必须在当前短事务内实现，禁止子代理、工作流扇出和探索 Todo。使用批准的文件映射；证据环境不可用时调用 action=block。")
-        }
-        if (evidenceTools.has(toolName)) {
-          const used = repositoryCalls.get(input.sessionID) ?? 0
-          if (used >= 16) throw new Error("DDD_IMPLEMENTATION_REPOSITORY_BUDGET_EXHAUSTED: 当前切片 16 次定向仓库读取预算已用完。禁止继续探索；依据批准的文件映射实施，或用 action=block 如实报告证据缺口。")
-          repositoryCalls.set(input.sessionID, used + 1)
-        }
-        if (["bash", "shell"].includes(toolName)) {
-          const command = String(args?.command ?? "")
-          if (/(?:Invoke-WebRequest|curl\s|wget\s|winget\s|choco\s|scoop\s|npm\s+install|下载|apache-maven)/iu.test(command)) {
-            throw new Error("DDD_IMPLEMENTATION_BOOTSTRAP_DENIED: Coding 阶段禁止临时下载或安装构建基础设施。缺失 Maven、数据库、缓存或外部服务时调用 action=block，记录真实证据与修复条件。")
-          }
-          const used = shellCalls.get(input.sessionID) ?? 0
-          if (used >= 10) throw new Error("DDD_IMPLEMENTATION_COMMAND_BUDGET_EXHAUSTED: 当前切片 10 次命令预算已用完。禁止通过命令变体反复重试；请提交已有真实证据或调用 action=block。")
-          shellCalls.set(input.sessionID, used + 1)
-        }
-      }
-      if (evidenceCalls.has(input.sessionID)) {
-        if (["subagent", "workflow_run", "todowrite"].includes(toolName)) {
-          throw new Error("DDD_EVIDENCE_TOOL_DENIED: 现状证据阶段禁止子代理、工作流扇出和探索 Todo；请在当前短事务内完成定向取证。")
-        }
-        if (evidenceTools.has(toolName) || ["bash", "shell"].includes(toolName)) {
-          throw new Error("DDD_EVIDENCE_BUNDLE_REQUIRED: 现状阶段禁止逐文件或 Shell 探索。请调用一次 ddd_lifecycle(action=evidence-bundle, input={stage:'01-current-evidence',terms:[...]})，然后直接 complete-stage；包外未知项记录为 evidence gap。")
-        }
-      }
+      // Read-only evidence gathering is allowed in prepared modeling stages.
+      // The host retains shell/network/install permissions; call count and keywords are not authority.
       // Formal DDD/OpenSpec artifacts are transaction-owned. The model may
       // edit production code, but it must publish review documents and
       // planning artifacts through ddd_lifecycle so validation happens before
@@ -963,44 +882,26 @@ export const DddWorkflowPlugin: Plugin = async (pluginInput, pluginOptions) => {
         const target = String(args?.filePath ?? args?.path ?? "").replace(/\\/gu, "/")
         const formalArtifact = /(?:^|\/)openspec\/changes\/[^/]+\/(?:ddd\/(?:(?:I|II|III|IV|V|VI)-[a-z-]+\.md|\.ddd\/stages\/(?:0[0-9]|1[0-2])-[a-z0-9-]+\.md)|proposal\.md|design\.md|tasks\.md|specs\/[^/]+\/spec\.md)$/iu
         if (sessionIsDdd && target && formalArtifact.test(target)) {
-          // Mobile Coder currently logs and swallows exceptions raised by a
-          // plugin's tool.execute.before hook.  Fail closed even on that host:
-          // mutate the shared tool arguments to target the workspace directory,
-          // which every file-writing primitive rejects without changing data.
-          // Hosts that correctly propagate hook errors still stop on the
-          // explicit policy error below.
-          if (args) {
-            if ("filePath" in args) args.filePath = path.resolve(pluginInput.directory)
-            if ("path" in args) args.path = path.resolve(pluginInput.directory)
-            if ("patchText" in args) args.patchText = ""
-            if ("patch" in args) args.patch = ""
-          }
           throw new Error("DDD_FORMAL_ARTIFACT_WRITE_DENIED: 阶段产物、罗马数字里程碑和 OpenSpec 规划工件只能通过 ddd_lifecycle 事务写入；业务阶段无权直接修改人工验收文档。")
         }
       }
-      if (sessionIsDdd && !codingToolAccess && !isDddLifecyclePayload && toolName !== "skill") {
-        throw new Error("DDD_LIFECYCLE_ONLY: 当前建模/审批阶段只允许 professional skill 与 ddd_lifecycle。无需检查 Skill 目录、扫描 OpenSpec 或查找 CLI；review 会自动绑定当前人工门，prepare 会返回全部阶段上下文。")
+      if (sessionIsDdd && !codingToolAccess && !isDddLifecyclePayload && toolName !== "skill" && !(activeStage && evidenceTools.has(toolName))) {
+        throw new Error("DDD_LIFECYCLE_ONLY: 当前阶段不允许工程写入或 Shell 执行。先通过 prepare 进入合法阶段；建模时可用只读工具补充证据，正式产物通过 ddd_lifecycle 发布。")
       }
     },
     async "tool.execute.after"(input, hookOutput) {
       const request = (input.args as Record<string, any> | undefined) ?? {}
-      if (!dddSessions.has(input.sessionID) || request.action !== "prepare") return
+      if (input.tool.toLowerCase() !== lifecycleToolId || request.action !== "prepare") return
       try {
         const raw = hookOutput.output as unknown
         const result = typeof raw === "string" ? JSON.parse(raw) : raw as any
-        if (result?.stageCard?.scopeContractId === "existing-system-baseline") {
-          evidenceCalls.set(input.sessionID, 0)
-        } else if (result?.stageCard) {
-          evidenceCalls.delete(input.sessionID)
-        }
         if (result?.stageCard?.stageId) {
+          dddSessions.add(input.sessionID)
           activeStages.set(input.sessionID, result.stageCard.stageId)
-          repositoryCalls.set(input.sessionID, 0)
-          shellCalls.set(input.sessionID, 0)
         }
       } catch {
-        // The explicit-stage path in before remains authoritative when a host
-        // wraps display output. Do not guess a phase from unparseable output.
+        // Failed/unparseable results grant no stage access. Durable state
+        // remains available to recover successful operations.
       }
     },
     tool: { [lifecycleToolId]: dddLifecycleTool },

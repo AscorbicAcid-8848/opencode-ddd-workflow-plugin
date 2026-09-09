@@ -44,10 +44,8 @@ export async function resumeInSession(item: WorkflowItem, target: string | null,
       if (created.error || !created.data) throw new Error("新建会话失败")
       sessionID = created.data.id
     }
-    const stage = fresh.profile?.stages.find(s => s.id === fresh.transition?.nextStage)
-    const agent = stage?.implementationEvidence ? "ddd-coding" : "ddd-workflow"
     const text = `继续已有 DDD 工作流。先调用 ddd_lifecycle(action="status", workflow_id=${JSON.stringify(fresh.id)}, input={view:"compact"})，按返回状态推进，不得 init 或重置。续跑不代表批准：等待人工审核时展示当前结果并停止，不得自行 review。只在 allowedNextStages 内工作，遇到人工检查点或真实阻塞停止。`
-    const sent = await client.session.promptAsync({ directory: item.project, sessionID, agent,
+    const sent = await client.session.promptAsync({ directory: item.project, sessionID,
       messageID: `msg_${randomBytes(16).toString("hex")}`, parts: [{ type: "text", text }] })
     if (sent.error) throw new Error(`续跑发送失败，请检查目标会话后再操作：${sessionID}`)
     return sessionID

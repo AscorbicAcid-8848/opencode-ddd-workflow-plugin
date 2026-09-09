@@ -58,7 +58,7 @@ export async function sendPanelReview(item: WorkflowItem, previous: MilestoneVie
     const label = { approve: "批准", revise: "修改", reject: "拒绝" }[record.decision]
     const text = `${label}里程碑 ${view.roman}${record.feedback ? `：${record.feedback}` : "。"}`
     const result = await client.session.promptAsync({ sessionID, directory: item.project, messageID,
-      noReply: record.decision === "reject", agent: view.roman === "VI" || (view.roman === "V" && record.decision === "approve") ? "ddd-coding" : "ddd-workflow",
+      noReply: record.decision === "reject",
       parts: [{ type: "text", text }] })
     if (result.error) throw new Error("审核已保存，但消息发送失败。请重试同步，不要重复审核。")
     return { sessionID, messageID, alreadySent: false }

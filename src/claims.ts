@@ -1,4 +1,5 @@
 import path from "node:path"
+import { readFile, realpath } from "node:fs/promises"
 import { exists, readJson } from "./fs.js"
 import type { StageClaim, StageClaimContract, ValidationFinding, WorkflowState } from "./types.js"
 
@@ -33,8 +34,11 @@ export function claimContractFor(scopeId?: string): StageClaimContract | null {
   return scopeId === "existing-system-baseline" ? structuredClone(evidenceBaselineContract) : null
 }
 
+// Natural-language lint cannot prove a scope violation. Typed ownership,
+// references and evidence metadata remain deterministic blocking checks.
+const proseDiagnostics = new Set(["EVIDENCE_STAGE_TARGET_DESIGN_LEAK", "EVIDENCE_STAGE_TARGET_BEHAVIOR_LEAK", "UNMAPPED_ABSENCE_ASSERTION", "ABSENCE_CLAIM_NOT_PROVEN"])
 const finding = (code: string, pathValue: string, message: string, suggestion?: string): ValidationFinding => ({
-  code, path: pathValue, message, severity: "blocking", ...(suggestion ? { suggestion } : {}),
+  code, path: pathValue, message, severity: proseDiagnostics.has(code) ? "warning" : "blocking", ...(suggestion ? { suggestion } : {}),
 })
 
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && Boolean(value.trim())
@@ -287,9 +291,9 @@ export async function validateStageClaims(
             `OpenSpec 索引 claim 的 authorityRefs 必须包含同一个签发引用：${reference}。`))
         }
       }
-      if (reference.startsWith("code:") && !issuedCodeRefs.has(reference)) {
-        findings.push(finding("CODE_EVIDENCE_NOT_ISSUED", `${base}.evidenceRefs`,
-          `代码证据必须逐字使用 evidence-bundle 签发的 excerpt.ref，禁止扩大行范围或补读未签发位置：${reference}。`))
+      if (reference.startsWith("code:") && !issuedCodeRefs.has(reference) && !await validCodeReference(state.projectRoot, reference)) {
+        findings.push(finding("CODE_EVIDENCE_INVALID", `${base}.evidenceRefs`,
+          `代码引用必须定位到项目内真实文件及有效行范围：${reference}。`))
       }
       const relativePath = normalizeReferencePath(reference)
       if (relativePath) {
@@ -301,6 +305,9 @@ export async function validateStageClaims(
     }
     const attributes = claim.attributes && typeof claim.attributes === "object" && !Array.isArray(claim.attributes)
       ? claim.attributes : {}
+    if (attributes.availability === "absent" && !claim.evidenceRefs.some(reference => reference.startsWith("search:"))) {
+      findings.push(finding("ABSENT_EVIDENCE_REQUIRED", `${base}.evidenceRefs`, "显式声明 absent 必须绑定可验证的搜索范围证据。"))
+    }
     const signedSearchClaim = claim.evidenceRefs.some((reference) => authorizedSearch.has(reference))
     if (signedSearchClaim && attributes.availability !== "unknown") {
       findings.push(finding("SEARCH_EVIDENCE_AVAILABILITY_INVALID", `${base}.attributes.availability`,
@@ -361,12 +368,15 @@ export async function validateStageClaims(
       ))
     }
     const proseCodeRefs = [...part.text.matchAll(/code:[A-Za-z0-9_./\\-]+#L\d+-L\d+/gu)].map((match) => match[0])
-    const unissuedCodeRefs = [...new Set(proseCodeRefs.filter((reference) => !issuedCodeRefs.has(reference)))]
-    if (unissuedCodeRefs.length) findings.push(finding(
-      "PROSE_CODE_EVIDENCE_NOT_ISSUED",
+    const invalidCodeRefs: string[] = []
+    for (const reference of new Set(proseCodeRefs)) {
+      if (!issuedCodeRefs.has(reference) && !await validCodeReference(state.projectRoot, reference)) invalidCodeRefs.push(reference)
+    }
+    if (invalidCodeRefs.length) findings.push(finding(
+      "PROSE_CODE_EVIDENCE_INVALID",
       part.path,
-      `正文使用了 evidence-bundle 未签发或自行扩大的代码范围：${unissuedCodeRefs.join("、")}。`,
-      "逐字使用 evidence-bundle 返回的 excerpt.ref；正文和 typed claim 适用同一证据边界。",
+      `正文引用无法定位到项目内真实代码范围：${invalidCodeRefs.join("、")}。`,
+      "可引用证据包或定向读取的源码；文件与行范围必须真实存在。引用有效不等于业务结论已被证明。",
     ))
   }
   for (const part of narrativeParts) for (const sentence of sentences(part.text)) {
@@ -397,4 +407,17 @@ export async function validateStageClaims(
     }
   }
   return findings
+}
+
+async function validCodeReference(projectRoot: string, reference: string): Promise<boolean> {
+  const match = /^code:(.+)#L(\d+)(?:-L(\d+))?$/u.exec(reference)
+  if (!match) return false
+  try {
+    const root = await realpath(projectRoot)
+    const file = await realpath(path.resolve(root, match[1]))
+    if (!isWithin(root, file)) return false
+    const first = Number(match[2]), last = Number(match[3] ?? match[2])
+    const lines = (await readFile(file, "utf8")).trimEnd().split(/\r?\n/u).length
+    return first >= 1 && last >= first && last <= lines
+  } catch { return false }
 }
